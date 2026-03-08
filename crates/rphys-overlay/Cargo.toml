@@ -1,0 +1,12 @@
+[package]
+name = "rphys-overlay"
+version = "0.1.0"
+edition = "2021"
+description = "Race overlay rendering for rphys-renderer — draws leaderboards and announcements into Frame buffers using fontdue"
+
+[dependencies]
+rphys-renderer = { path = "../rphys-renderer" }
+rphys-race     = { path = "../rphys-race" }
+rphys-scene    = { path = "../rphys-scene" }
+fontdue        = { workspace = true }
+thiserror      = { workspace = true }
