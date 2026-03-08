@@ -25,7 +25,7 @@ use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::RaceTracker;
 use rphys_renderer::{
-    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, StaticCamera,
+    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
     TinySkiaRenderer,
 };
 use rphys_scene::{Scene, Vec2};
@@ -289,11 +289,19 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     // ── Build camera ───────────────────────────────────────────────────────
     let world = &scene.environment.world_bounds;
     let bg = scene.environment.background_color;
-    let mut static_cam =
-        StaticCamera::from_world(options.width, options.height, world.width, world.height, bg);
 
-    let initial_state = tracker.physics_state();
-    let initial_ctx = static_cam.update(&initial_state, 0.0);
+    // For a vertically-scrolling race camera, scale is determined by the
+    // *width* only — the camera follows the leader vertically, so the world
+    // height is irrelevant for zoom.  Using min(scale_x, scale_y) would
+    // shrink everything when the course is taller than the viewport ratio.
+    let race_scale = options.width as f32 / world.width;
+    let initial_ctx = RenderContext {
+        width: options.width,
+        height: options.height,
+        camera_origin: rphys_scene::Vec2::ZERO,
+        scale: race_scale,
+        background_color: bg,
+    };
 
     let camera_cfg = RaceCameraConfig {
         racer_tag: race_config.racer_tag.clone(),
