@@ -801,7 +801,9 @@ name = "rphys-export"
 version = "0.1.0"
 dependencies = [
  "rphys-audio",
+ "rphys-overlay",
  "rphys-physics",
+ "rphys-race",
  "rphys-renderer",
  "rphys-scene",
  "tempfile",

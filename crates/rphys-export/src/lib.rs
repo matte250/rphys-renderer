@@ -24,8 +24,10 @@ use rphys_audio::{AudioEvent, OfflineAudioMixer};
 use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::RaceTracker;
-use rphys_renderer::{CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
-    StaticCamera, TinySkiaRenderer};
+use rphys_renderer::{
+    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, StaticCamera,
+    TinySkiaRenderer,
+};
 use rphys_scene::{Scene, Vec2};
 use tempfile::NamedTempFile;
 use thiserror::Error;
