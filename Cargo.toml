@@ -8,6 +8,7 @@ members = [
     "crates/rphys-preview",
     "crates/rphys-export",
     "crates/rphys-cli",
+    "crates/rphys-race",
 ]
 
 # ── Shared dependency versions ────────────────────────────────────────────────
@@ -46,4 +47,6 @@ tempfile = "3.26.0"
 png = "0.18"
 
 # Internal workspace crates
-rphys-scene = { path = "crates/rphys-scene" }
+rphys-scene   = { path = "crates/rphys-scene" }
+rphys-physics = { path = "crates/rphys-physics" }
+rphys-race    = { path = "crates/rphys-race" }

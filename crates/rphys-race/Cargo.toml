@@ -1,0 +1,10 @@
+[package]
+name = "rphys-race"
+version = "0.1.0"
+edition = "2021"
+description = "Race state tracking for rphys-renderer race scenes"
+
+[dependencies]
+rphys-scene   = { workspace = true }
+rphys-physics = { workspace = true }
+thiserror     = { workspace = true }

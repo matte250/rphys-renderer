@@ -816,6 +816,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rphys-race"
+version = "0.1.0"
+dependencies = [
+ "rphys-physics",
+ "rphys-scene",
+ "thiserror",
+]
+
+[[package]]
 name = "rphys-renderer"
 version = "0.1.0"
 dependencies = [
