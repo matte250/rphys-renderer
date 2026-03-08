@@ -146,6 +146,17 @@ pub enum ExportError {
 /// - [`ExportError::Audio`]         — audio engine error.
 /// - [`ExportError::Io`]            — I/O error.
 pub fn export(scene: &Scene, options: ExportOptions) -> Result<(), ExportError> {
+    if scene.race.is_some() {
+        export_race(scene, options)
+    } else {
+        export_standard(scene, options)
+    }
+}
+
+/// Standard (non-race) export pipeline.
+///
+/// Runs physics headlessly, renders with a static camera, and muxes audio.
+fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportError> {
     // ── Determine maximum duration ─────────────────────────────────────────
     let max_duration = resolve_max_duration(scene, &options)?;
 
@@ -218,6 +229,150 @@ pub fn export(scene: &Scene, options: ExportOptions) -> Result<(), ExportError> 
     // ── Audio mux pass ─────────────────────────────────────────────────────
     // Only re-mux if there are any audio events; otherwise skip to keep
     // things simple and avoid failing in environments without audio files.
+    if scene.audio.default_bounce.is_some()
+        || scene.audio.default_destroy.is_some()
+        || scene
+            .objects
+            .iter()
+            .any(|o| o.audio.bounce.is_some() || o.audio.destroy.is_some())
+    {
+        let duration_secs = frame_count as f32 / options.fps as f32;
+        let wav_file = NamedTempFile::new().map_err(ExportError::Io)?;
+        audio
+            .write_wav(wav_file.path(), duration_secs)
+            .map_err(ExportError::Audio)?;
+
+        remux_with_audio(&options.output_path, wav_file.path())?;
+    }
+
+    Ok(())
+}
+
+/// Race export pipeline.
+///
+/// Uses [`RaceTracker`] to drive the simulation, [`RaceCamera`] for dynamic
+/// camera follow, and [`OverlayRenderer`] for rank panels and finish lines.
+/// After the race completes, holds the winner frame for
+/// `race_config.announcement_hold_secs` seconds.
+fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError> {
+    let race_config = scene
+        .race
+        .as_ref()
+        .expect("export_race called without race config");
+
+    // ── Determine safety-cap duration ─────────────────────────────────────
+    // Race scenes terminate primarily via is_race_complete(). max_duration is
+    // only a fallback cap. If no duration is available, use a large default.
+    let max_duration = resolve_max_duration(scene, &options).unwrap_or(f32::MAX);
+
+    // ── Build subsystems ───────────────────────────────────────────────────
+    let physics_cfg = PhysicsConfig {
+        max_steps_per_call: u32::MAX,
+        ..PhysicsConfig::default()
+    };
+    let mut tracker = RaceTracker::new(scene, physics_cfg)?;
+    let renderer = TinySkiaRenderer;
+    let mut audio = OfflineAudioMixer::new(44100, 2);
+
+    // ── Build camera ───────────────────────────────────────────────────────
+    let world = &scene.environment.world_bounds;
+    let bg = scene.environment.background_color;
+    let mut static_cam =
+        StaticCamera::from_world(options.width, options.height, world.width, world.height, bg);
+
+    let initial_state = tracker.physics_state();
+    let initial_ctx = static_cam.update(&initial_state, 0.0);
+
+    let camera_cfg = RaceCameraConfig {
+        racer_tag: race_config.racer_tag.clone(),
+        ..RaceCameraConfig::default()
+    };
+    let mut camera = RaceCamera::new(camera_cfg, initial_ctx);
+
+    let overlay = OverlayRenderer::new();
+
+    // ── Spawn ffmpeg ───────────────────────────────────────────────────────
+    let mut ffmpeg = spawn_ffmpeg_video_only(&options)?;
+    let mut ffmpeg_stdin = ffmpeg
+        .stdin
+        .take()
+        .ok_or_else(|| ExportError::Io(std::io::Error::other("failed to open ffmpeg stdin")))?;
+
+    // ── Main race loop ─────────────────────────────────────────────────────
+    let frame_dt = 1.0_f32 / options.fps as f32;
+    let mut frame_count = 0u64;
+
+    loop {
+        let target_time = (frame_count + 1) as f32 / options.fps as f32;
+
+        let (physics_events, _race_events) = tracker.advance_to(target_time)?;
+
+        // Collect audio events.
+        for event in &physics_events {
+            collect_audio_event(&mut audio, tracker.engine(), event, tracker.time(), scene);
+        }
+
+        // Render frame with race camera.
+        let phys_state = tracker.physics_state();
+        let ctx = camera.update(&phys_state, frame_dt);
+        let mut frame = renderer.render(&phys_state, &ctx);
+
+        // Draw race overlay (finish/checkpoint lines + rank panel).
+        overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &ctx)?;
+
+        // Write frame to ffmpeg.
+        ffmpeg_stdin
+            .write_all(&frame.pixels)
+            .map_err(ExportError::Io)?;
+
+        frame_count += 1;
+
+        // Exit when the race or physics is done, or safety cap reached.
+        if tracker.is_race_complete()
+            || tracker.is_physics_complete()
+            || target_time >= max_duration
+        {
+            break;
+        }
+    }
+
+    // ── Winner announcement hold ───────────────────────────────────────────
+    // Render the final physics frame with the winner announcement composited on
+    // top, then repeat it for the configured hold duration.
+    let hold_secs = race_config.announcement_hold_secs;
+    let hold_frames = (hold_secs * options.fps as f32).round() as u64;
+
+    if hold_frames > 0 && tracker.race_state().winner.is_some() {
+        let phys_state = tracker.physics_state();
+        // Camera stays at its last position; update with dt=0.0 to freeze it.
+        let last_ctx = camera.update(&phys_state, 0.0);
+        let mut frame = renderer.render(&phys_state, &last_ctx);
+
+        overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &last_ctx)?;
+        overlay.draw_winner_announcement(&mut frame, tracker.race_state())?;
+
+        // Write the same winner frame for each hold frame.
+        for _ in 0..hold_frames {
+            ffmpeg_stdin
+                .write_all(&frame.pixels)
+                .map_err(ExportError::Io)?;
+            frame_count += 1;
+        }
+    }
+
+    // ── Finalise video ─────────────────────────────────────────────────────
+    drop(ffmpeg_stdin);
+
+    let status = ffmpeg.wait().map_err(ExportError::Io)?;
+    if !status.success() {
+        let code = status.code().unwrap_or(-1);
+        return Err(ExportError::FfmpegFailed {
+            code,
+            stderr: "(stderr not captured in video-only pass)".to_string(),
+        });
+    }
+
+    // ── Audio mux pass ─────────────────────────────────────────────────────
     if scene.audio.default_bounce.is_some()
         || scene.audio.default_destroy.is_some()
         || scene
@@ -456,8 +611,8 @@ fn volume_from_impulse(impulse: f32, max_impulse: f32) -> f32 {
 mod tests {
     use super::*;
     use rphys_scene::{
-        BodyType, Color, Environment, Material, ObjectAudio, SceneAudio, SceneMeta, SceneObject,
-        ShapeKind, Vec2, WallConfig, WorldBounds,
+        BodyType, Checkpoint, Color, EndCondition, Environment, Material, ObjectAudio, RaceConfig,
+        SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
     };
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -682,5 +837,176 @@ mod tests {
         };
         let d = resolve_max_duration(&scene, &opts).expect("should resolve");
         assert!((d - 5.0).abs() < 1e-5);
+    }
+
+    // ── Race helpers ──────────────────────────────────────────────────────────
+
+    /// Build a minimal race scene: two balls with `"racer"` tag, finish line at
+    /// y=2.0, and a time-limit fallback end condition.
+    fn minimal_race_scene() -> Scene {
+        let make_ball = |name: &str, x: f32, color: Color| SceneObject {
+            name: Some(name.to_string()),
+            shape: ShapeKind::Circle { radius: 0.4 },
+            position: Vec2::new(x, 3.5),
+            velocity: Vec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: 0.0,
+            body_type: BodyType::Dynamic,
+            material: Material {
+                restitution: 0.1,
+                friction: 0.5,
+                density: 1.0,
+            },
+            color,
+            tags: vec!["racer".to_string()],
+            destructible: None,
+            audio: ObjectAudio::default(),
+        };
+
+        Scene {
+            version: "1".to_string(),
+            meta: SceneMeta {
+                name: "race_test".to_string(),
+                description: None,
+                author: None,
+                duration_hint: None,
+            },
+            environment: Environment {
+                gravity: Vec2::new(0.0, -9.81),
+                background_color: Color::rgb(20, 20, 30),
+                world_bounds: WorldBounds {
+                    width: 20.0,
+                    height: 20.0,
+                },
+                walls: WallConfig {
+                    visible: true,
+                    color: Color::WHITE,
+                    thickness: 0.5,
+                },
+            },
+            objects: vec![
+                make_ball("Red", 6.0, Color::rgb(220, 50, 50)),
+                make_ball("Blue", 14.0, Color::rgb(50, 100, 220)),
+            ],
+            end_condition: Some(EndCondition::Or {
+                conditions: vec![
+                    EndCondition::FirstToReach {
+                        finish_y: 2.0,
+                        tag: "racer".to_string(),
+                    },
+                    EndCondition::TimeLimit { seconds: 0.5 },
+                ],
+            }),
+            audio: SceneAudio::default(),
+            race: Some(RaceConfig {
+                finish_y: 2.0,
+                racer_tag: "racer".to_string(),
+                announcement_hold_secs: 0.0, // no hold to keep test fast
+                checkpoints: vec![],
+            }),
+        }
+    }
+
+    // ── Race export integration test (requires ffmpeg) ─────────────────────────
+
+    #[test]
+    fn test_race_export_produces_file_when_ffmpeg_available() {
+        if !ffmpeg_available() {
+            eprintln!("SKIP: ffmpeg not found on PATH");
+            return;
+        }
+
+        let scene = minimal_race_scene();
+        let tmp_dir = tempfile::tempdir().expect("tempdir");
+        let output = tmp_dir.path().join("test_race_export.mp4");
+
+        let opts = ExportOptions {
+            preset: Preset::Custom,
+            width: 64,
+            height: 64,
+            fps: 10,
+            output_path: output.clone(),
+            max_duration: Some(0.5),
+        };
+
+        let result = export(&scene, opts);
+        assert!(result.is_ok(), "race export failed: {:?}", result.err());
+
+        let metadata = std::fs::metadata(&output).expect("output file should exist");
+        assert!(
+            metadata.len() > 0,
+            "output file should be non-empty (got {} bytes)",
+            metadata.len()
+        );
+    }
+
+    // ── Race auto-detection test ──────────────────────────────────────────────
+
+    #[test]
+    fn test_export_auto_detects_race_scene() {
+        // A scene with race config should route to export_race(), which uses
+        // RaceTracker. Verify it does NOT return ExportError::NoDuration even
+        // though the scene has no explicit numeric duration at the top level
+        // (duration comes from TimeLimit inside the Or condition).
+        //
+        // We check this without ffmpeg by verifying the dispatch decision:
+        // export() on a scene with scene.race.is_some() must attempt the race
+        // path. If ffmpeg is missing, we'll get FfmpegNotFound — not NoDuration.
+        let scene = minimal_race_scene();
+        let tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        let opts = ExportOptions {
+            preset: Preset::Custom,
+            width: 64,
+            height: 64,
+            fps: 10,
+            output_path: tmp.path().to_path_buf(),
+            max_duration: Some(0.5),
+        };
+
+        let result = export(&scene, opts);
+
+        // The result must not be NoDuration — the race path handles duration.
+        assert!(
+            !matches!(result, Err(ExportError::NoDuration)),
+            "race scene should not return NoDuration; got: {result:?}"
+        );
+    }
+
+    // ── Race scene with checkpoints (overlay smoke test) ──────────────────────
+
+    #[test]
+    fn test_race_export_with_checkpoints_when_ffmpeg_available() {
+        if !ffmpeg_available() {
+            eprintln!("SKIP: ffmpeg not found on PATH");
+            return;
+        }
+
+        let mut scene = minimal_race_scene();
+        // Add a checkpoint above the finish line.
+        if let Some(ref mut race) = scene.race {
+            race.checkpoints = vec![Checkpoint {
+                y: 3.2,
+                label: Some("Halfway".to_string()),
+            }];
+        }
+
+        let tmp_dir = tempfile::tempdir().expect("tempdir");
+        let output = tmp_dir.path().join("test_race_checkpoint.mp4");
+
+        let opts = ExportOptions {
+            preset: Preset::Custom,
+            width: 64,
+            height: 64,
+            fps: 10,
+            output_path: output.clone(),
+            max_duration: Some(0.5),
+        };
+
+        let result = export(&scene, opts);
+        assert!(
+            result.is_ok(),
+            "race export with checkpoints failed: {:?}",
+            result.err()
+        );
     }
 }
