@@ -29,6 +29,12 @@ impl Vec2 {
     pub const ZERO: Vec2 = Vec2 { x: 0.0, y: 0.0 };
 }
 
+impl From<[f32; 2]> for Vec2 {
+    fn from(arr: [f32; 2]) -> Self {
+        Self::new(arr[0], arr[1])
+    }
+}
+
 /// RGBA color stored as 0–255 components.
 ///
 /// In YAML, colors are written as `"#RRGGBB"` or `"#RRGGBBAA"` hex strings.
@@ -293,7 +299,7 @@ pub enum EndCondition {
 ///
 /// Per-object [`ObjectAudio`] overrides these.
 /// Paths are resolved relative to the scene file's directory.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SceneAudio {
     /// Fallback bounce sound when an object has no per-object bounce sound.
     pub default_bounce: Option<PathBuf>,
@@ -301,6 +307,17 @@ pub struct SceneAudio {
     pub default_destroy: Option<PathBuf>,
     /// Master volume multiplier: 0.0 = silent, 1.0 = full.
     pub master_volume: f32,
+}
+
+impl Default for SceneAudio {
+    /// Returns a `SceneAudio` with no sounds and `master_volume = 1.0` (full volume).
+    fn default() -> Self {
+        Self {
+            default_bounce: None,
+            default_destroy: None,
+            master_volume: 1.0,
+        }
+    }
 }
 
 // ── Metadata ──────────────────────────────────────────────────────────────────

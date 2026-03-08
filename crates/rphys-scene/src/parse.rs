@@ -4,7 +4,7 @@
 //! - [`parse_scene`]  — parse a YAML string
 //! - [`parse_scene_file`] — parse a file, resolving relative asset paths
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::de::{
@@ -140,11 +140,22 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
     // at the first error.
     let mut errors: Vec<ValidationError> = Vec::new();
 
-    // Collect the set of named objects for end-condition reference checks.
-    let named_objects: HashSet<String> = raw
+    // Count name occurrences — used for both duplicate detection and
+    // end-condition reference validation.  Names that appear more than once
+    // are excluded from `named_objects` so that end-condition checks also
+    // fail for ambiguous (duplicated) names.
+    let name_counts: HashMap<&str, usize> = raw
         .objects
         .iter()
-        .filter_map(|obj| obj.name.clone())
+        .filter_map(|obj| obj.name.as_deref())
+        .fold(HashMap::new(), |mut map, name| {
+            *map.entry(name).or_insert(0) += 1;
+            map
+        });
+    let named_objects: HashSet<String> = name_counts
+        .iter()
+        .filter(|(_, &count)| count == 1)
+        .map(|(name, _)| name.to_string())
         .collect();
 
     // Validate and convert all objects.
@@ -167,6 +178,16 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         .as_ref()
         .and_then(|ec| convert_end_condition(ec, &named_objects, &mut errors));
 
+    // Validate meta.duration_hint (must be >= 0 if provided).
+    if let Some(hint) = raw.meta.duration_hint {
+        if hint < 0.0 {
+            errors.push(ValidationError::InvalidValue {
+                name: "meta.duration_hint".to_string(),
+                message: format!("duration_hint must be >= 0, got {hint}"),
+            });
+        }
+    }
+
     // Convert global audio.
     let audio = convert_scene_audio(raw.audio.as_ref(), base_dir, &mut errors);
 
@@ -174,7 +195,14 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         return Err(ParseError::Validation(errors));
     }
 
-    let environment = environment.expect("environment is required and we error on None");
+    // SAFETY: `convert_environment` returns `None` only when it pushes a
+    // validation error. Since `errors` is empty here, `environment` must be
+    // `Some`. The explicit match guards against future regressions where
+    // `convert_environment` might return `None` without recording an error.
+    let environment = match environment {
+        Some(e) => e,
+        None => return Err(ParseError::Validation(errors)),
+    };
 
     Ok(Scene {
         version: raw.version,
@@ -342,7 +370,8 @@ fn convert_object(
         }
     };
 
-    // Convert material.
+    // Convert material — validate all three fields before returning so all
+    // material errors are reported at once rather than stopping at the first.
     let material = match &raw.material {
         None => Material::default(),
         Some(rm) => {
@@ -350,25 +379,29 @@ fn convert_object(
             let friction = rm.friction.unwrap_or(0.5);
             let density = rm.density.unwrap_or(1.0);
 
+            let mut material_ok = true;
             if !(0.0..=1.0).contains(&restitution) {
                 errors.push(ValidationError::InvalidValue {
                     name: display_name.clone(),
                     message: format!("restitution must be between 0.0 and 1.0, got {restitution}"),
                 });
-                return None;
+                material_ok = false;
             }
             if friction < 0.0 {
                 errors.push(ValidationError::InvalidValue {
                     name: display_name.clone(),
                     message: format!("friction must be >= 0.0, got {friction}"),
                 });
-                return None;
+                material_ok = false;
             }
             if density <= 0.0 {
                 errors.push(ValidationError::InvalidValue {
                     name: display_name.clone(),
                     message: format!("density must be > 0.0, got {density}"),
                 });
+                material_ok = false;
+            }
+            if !material_ok {
                 return None;
             }
             Material {
@@ -396,11 +429,26 @@ fn convert_object(
 
     let tags = raw.tags.clone().unwrap_or_default();
 
-    let destructible = raw.destructible.as_ref().map(|d| Destructible {
-        min_impact_force: d.min_impact_force,
-    });
+    let destructible = match &raw.destructible {
+        None => None,
+        Some(d) => {
+            if d.min_impact_force <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: display_name.clone(),
+                    message: format!(
+                        "destructible.min_impact_force must be > 0, got {}",
+                        d.min_impact_force
+                    ),
+                });
+                return None;
+            }
+            Some(Destructible {
+                min_impact_force: d.min_impact_force,
+            })
+        }
+    };
 
-    let audio = convert_object_audio(raw.audio.as_ref(), base_dir, errors, &display_name);
+    let audio = convert_object_audio(raw.audio.as_ref(), base_dir, errors);
 
     Some(SceneObject {
         name: raw.name.clone(),
@@ -493,6 +541,13 @@ fn convert_wall_config(
         },
     };
     let thickness = raw.thickness.unwrap_or(0.3);
+    if thickness <= 0.0 {
+        errors.push(ValidationError::InvalidValue {
+            name: "environment.walls.thickness".to_string(),
+            message: format!("walls.thickness must be > 0, got {thickness}"),
+        });
+        return None;
+    }
     Some(WallConfig {
         visible,
         color,
@@ -510,6 +565,13 @@ fn convert_end_condition(
 ) -> Option<EndCondition> {
     match raw {
         RawEndCondition::TimeLimit { seconds } => {
+            if *seconds <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: "end_condition.time_limit".to_string(),
+                    message: format!("time_limit.seconds must be > 0, got {seconds}"),
+                });
+                return None;
+            }
             Some(EndCondition::TimeLimit { seconds: *seconds })
         }
         RawEndCondition::AllTaggedDestroyed { tag } => {
@@ -586,7 +648,6 @@ fn convert_object_audio(
     raw: Option<&crate::de::RawObjectAudio>,
     base_dir: Option<&Path>,
     errors: &mut Vec<ValidationError>,
-    obj_name: &str,
 ) -> ObjectAudio {
     let raw = match raw {
         None => return ObjectAudio::default(),
@@ -596,14 +657,11 @@ fn convert_object_audio(
     let bounce = raw.bounce.as_ref().map(|p| {
         let path = resolve_path(p, base_dir);
         if let Some(dir) = base_dir {
-            let full = dir.join(&path);
-            if !full.exists() {
-                errors.push(ValidationError::AudioFileNotFound { path: full });
+            if !dir.join(p).exists() {
+                errors.push(ValidationError::AudioFileNotFound { path: dir.join(p) });
             }
         }
-        // Return the resolved path even if not found (validation error is recorded).
-        let _ = obj_name; // used only for context, already in error above
-        resolve_path(p, base_dir)
+        path
     });
 
     let destroy = raw.destroy.as_ref().map(|p| {
@@ -660,6 +718,12 @@ fn convert_scene_audio(
     });
 
     let master_volume = raw.master_volume.unwrap_or(1.0);
+    if !(0.0..=1.0).contains(&master_volume) {
+        errors.push(ValidationError::InvalidValue {
+            name: "audio.master_volume".to_string(),
+            message: format!("master_volume must be between 0.0 and 1.0, got {master_volume}"),
+        });
+    }
 
     SceneAudio {
         default_bounce,
@@ -671,8 +735,12 @@ fn convert_scene_audio(
 // ── Low-level helpers ─────────────────────────────────────────────────────────
 
 /// Parse a `"#RRGGBB"` or `"#RRGGBBAA"` hex color string into a [`Color`].
+///
+/// The `#` prefix is required; strings without it are rejected.
 pub(crate) fn parse_hex_color(s: &str) -> Result<Color, String> {
-    let hex = s.strip_prefix('#').unwrap_or(s);
+    let hex = s
+        .strip_prefix('#')
+        .ok_or_else(|| format!("color must be '#RRGGBB' or '#RRGGBBAA' hex, got '{s}'"))?;
     match hex.len() {
         6 => {
             let r = parse_hex_byte(&hex[0..2], s)?;
@@ -1027,10 +1095,10 @@ objects:
     }
 
     #[test]
-    fn test_parse_color_without_hash() {
-        // Allow hex strings without leading '#'.
-        let c = parse_hex_color("ff0000").expect("valid rgb without hash");
-        assert_eq!(c, Color::rgb(0xff, 0x00, 0x00));
+    fn test_parse_color_without_hash_is_rejected() {
+        // Spec requires '#' prefix — strings without it must be rejected.
+        let err = parse_hex_color("ff0000").unwrap_err();
+        assert!(err.contains("'#RRGGBB' or '#RRGGBBAA'"), "got: {err}");
     }
 
     // ── Error-case tests ──────────────────────────────────────────────────────
@@ -1420,6 +1488,551 @@ objects:
         assert!((scene.audio.master_volume - 1.0).abs() < 1e-6);
         assert!(scene.audio.default_bounce.is_none());
         assert!(scene.audio.default_destroy.is_none());
+    }
+
+    #[test]
+    fn test_parse_scene_file() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+        tmp.write_all(minimal_yaml().as_bytes()).expect("write");
+        let scene = super::super::parse_scene_file(tmp.path()).expect("should parse from file");
+        assert_eq!(scene.version, "1");
+        assert_eq!(scene.meta.name, "Test Scene");
+    }
+
+    #[test]
+    fn test_parse_end_condition_and_composite() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "And EC"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "ball"
+    shape: circle
+    radius: 0.5
+    position: [10.0, 10.0]
+end_condition:
+  type: and
+  conditions:
+    - type: time_limit
+      seconds: 60.0
+    - type: object_escaped
+      name: "ball"
+"##;
+        let scene = parse_scene(yaml).expect("should parse And EC");
+        if let Some(EndCondition::And { conditions }) = &scene.end_condition {
+            assert_eq!(conditions.len(), 2);
+            assert!(matches!(conditions[0], EndCondition::TimeLimit { .. }));
+            assert!(matches!(conditions[1], EndCondition::ObjectEscaped { .. }));
+        } else {
+            panic!("expected And end condition");
+        }
+    }
+
+    #[test]
+    fn test_parse_nested_composite_end_condition() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Nested EC"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "ball"
+    shape: circle
+    radius: 0.5
+    position: [10.0, 10.0]
+end_condition:
+  type: or
+  conditions:
+    - type: time_limit
+      seconds: 30.0
+    - type: and
+      conditions:
+        - type: object_escaped
+          name: "ball"
+        - type: all_tagged_destroyed
+          tag: "enemy"
+"##;
+        let scene = parse_scene(yaml).expect("should parse nested EC");
+        if let Some(EndCondition::Or { conditions }) = &scene.end_condition {
+            assert_eq!(conditions.len(), 2);
+            assert!(matches!(conditions[1], EndCondition::And { .. }));
+        } else {
+            panic!("expected nested Or/And end condition");
+        }
+    }
+
+    #[test]
+    fn test_missing_position_field() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Missing Position"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "ball"
+    shape: circle
+    radius: 0.5
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::MissingField { name, field }
+                    if name == "ball" && *field == "position"
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_polygon_too_few_vertices() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Polygon"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: polygon
+    vertices:
+      - [0.0, 1.0]
+      - [1.0, -1.0]
+    position: [10.0, 10.0]
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("at least 3 vertices")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_circle_negative_radius() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Negative Radius"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: circle
+    radius: -1.0
+    position: [10.0, 10.0]
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("radius")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_invalid_body_type() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Body Type"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: circle
+    radius: 1.0
+    position: [10.0, 10.0]
+    body_type: "flying"
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("body_type")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_multiple_object_errors_accumulate() {
+        // Two separate objects both have errors — verify both are reported.
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Multi Error"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "a"
+    shape: circle
+    radius: -1.0
+    position: [5.0, 5.0]
+  - name: "b"
+    shape: circle
+    radius: -2.0
+    position: [15.0, 15.0]
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            let a_err = errs.iter().any(|e| {
+                matches!(
+                    e,
+                    ValidationError::InvalidValue { name, .. } if name == "a"
+                )
+            });
+            let b_err = errs.iter().any(|e| {
+                matches!(
+                    e,
+                    ValidationError::InvalidValue { name, .. } if name == "b"
+                )
+            });
+            assert!(a_err, "expected error for object 'a'");
+            assert!(b_err, "expected error for object 'b'");
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_objects_collided_end_condition_valid() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Collided EC"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "a"
+    shape: circle
+    radius: 0.5
+    position: [5.0, 10.0]
+  - name: "b"
+    shape: circle
+    radius: 0.5
+    position: [15.0, 10.0]
+end_condition:
+  type: objects_collided
+  name_a: "a"
+  name_b: "b"
+"##;
+        let scene = parse_scene(yaml).expect("should parse objects_collided");
+        assert!(matches!(
+            scene.end_condition,
+            Some(EndCondition::ObjectsCollided { name_a, name_b })
+                if name_a == "a" && name_b == "b"
+        ));
+    }
+
+    #[test]
+    fn test_objects_collided_end_condition_unknown_name() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Collided EC Bad"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "a"
+    shape: circle
+    radius: 0.5
+    position: [5.0, 10.0]
+end_condition:
+  type: objects_collided
+  name_a: "a"
+  name_b: "ghost"
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::UnknownObjectReference { name } if name == "ghost"
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_scene_json_schema_is_valid_json() {
+        use crate::scene_json_schema;
+        let schema = scene_json_schema();
+        let _: serde_json::Value =
+            serde_json::from_str(schema).expect("scene_json_schema() must be valid JSON");
+    }
+
+    #[test]
+    fn test_wall_config_defaults() {
+        // walls block with no sub-fields — all should use defaults.
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Wall Defaults"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls: {}
+objects: []
+"##;
+        let scene = parse_scene(yaml).expect("should parse with empty walls block");
+        assert!(scene.environment.walls.visible);
+        assert_eq!(scene.environment.walls.color, Color::WHITE);
+        assert!((scene.environment.walls.thickness - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_object_audio_parsed_from_yaml() {
+        // Parse a scene with object audio paths — no base_dir so no file check.
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Object Audio"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "ball"
+    shape: circle
+    radius: 0.5
+    position: [10.0, 10.0]
+    audio:
+      bounce: "sounds/bounce.wav"
+      destroy: "sounds/pop.wav"
+"##;
+        let scene = parse_scene(yaml).expect("should parse object audio");
+        let audio = &scene.objects[0].audio;
+        assert!(audio.bounce.is_some());
+        assert!(audio.destroy.is_some());
+    }
+
+    #[test]
+    fn test_time_limit_seconds_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Seconds"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects: []
+end_condition:
+  type: time_limit
+  seconds: -10.0
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { message, .. }
+                    if message.contains("seconds")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_master_volume_out_of_range() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Volume"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects: []
+audio:
+  master_volume: 2.5
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, .. }
+                    if name == "audio.master_volume"
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_wall_thickness_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Wall"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: -0.5
+objects: []
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, .. }
+                    if name == "environment.walls.thickness"
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_destructible_min_impact_force_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Destructible"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: circle
+    radius: 1.0
+    position: [10.0, 10.0]
+    destructible:
+      min_impact_force: -5.0
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("min_impact_force")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
     }
 
     #[test]

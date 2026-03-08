@@ -217,6 +217,7 @@ static SCENE_SCHEMA: &str = r##"{
       "type": "object",
       "description": "A single simulated body.",
       "required": ["shape", "position"],
+      "additionalProperties": false,
       "properties": {
         "name":     { "type": "string", "description": "Unique identifier (optional)." },
         "shape": {
@@ -301,6 +302,7 @@ static SCENE_SCHEMA: &str = r##"{
       },
       "oneOf": [
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "time_limit" },
             "seconds": { "type": "number", "exclusiveMinimum": 0 }
@@ -308,6 +310,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["seconds"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "all_tagged_destroyed" },
             "tag": { "type": "string" }
@@ -315,6 +318,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["tag"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "object_escaped" },
             "name": { "type": "string" }
@@ -322,6 +326,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["name"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "objects_collided" },
             "name_a": { "type": "string" },
@@ -330,6 +335,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["name_a", "name_b"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "tags_collided" },
             "tag_a": { "type": "string" },
@@ -338,6 +344,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["tag_a", "tag_b"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "and" },
             "conditions": {
@@ -349,6 +356,7 @@ static SCENE_SCHEMA: &str = r##"{
           "required": ["conditions"]
         },
         {
+          "additionalProperties": false,
           "properties": {
             "type": { "const": "or" },
             "conditions": {

@@ -15,9 +15,10 @@ members = [
 # Update by running: curl -s https://crates.io/api/v1/crates/<name> | python3 -c "..."
 [workspace.dependencies]
 # Scene parsing
-serde     = { version = "1.0.228", features = ["derive"] }
-serde_yml = "0.0.12"
-thiserror = "2.0.18"
+serde      = { version = "1.0.228", features = ["derive"] }
+serde_yml  = "0.0.12"
+serde_json = "1.0.149"
+thiserror  = "2.0.18"
 
 # Physics
 rapier2d = { version = "0.32.0", features = ["enhanced-determinism"] }

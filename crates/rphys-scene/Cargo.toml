@@ -8,3 +8,7 @@ description = "YAML scene parser and model for rphys-renderer"
 serde     = { workspace = true }
 serde_yml = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tempfile   = { workspace = true }
