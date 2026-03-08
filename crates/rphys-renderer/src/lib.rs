@@ -253,9 +253,10 @@ fn draw_rect(
         return;
     };
 
-    // Rotate in screen space (CW positive with Y-down = physics CCW sign flipped
-    // by the Y flip, so both cancel and we use the same angle magnitude).
-    let angle_deg = rotation.to_degrees();
+    // Physics uses Y-up with CCW-positive rotation. The renderer flips Y, which
+    // mirrors the apparent rotation direction. To match the physics collider we
+    // must negate the angle when drawing in Y-down screen space.
+    let angle_deg = -rotation.to_degrees();
     let transform = Transform::from_rotate(angle_deg).post_translate(cx, cy);
 
     let mut paint = Paint::default();

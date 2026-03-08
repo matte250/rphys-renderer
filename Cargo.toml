@@ -42,5 +42,8 @@ anyhow = "1.0.102"
 # Export
 tempfile = "3.26.0"
 
+# PNG encoding (transitive via tiny-skia, pinned here for examples)
+png = "0.18"
+
 # Internal workspace crates
 rphys-scene = { path = "crates/rphys-scene" }
