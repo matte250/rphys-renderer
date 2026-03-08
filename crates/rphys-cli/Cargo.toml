@@ -9,6 +9,7 @@ name = "rphys"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = { workspace = true }
-# clap = { workspace = true }  # Uncomment when implementing
-rphys-scene = { workspace = true }
+anyhow     = { workspace = true }
+clap       = { workspace = true }
+rphys-scene  = { workspace = true }
+rphys-export = { path = "../rphys-export" }
