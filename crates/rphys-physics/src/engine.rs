@@ -34,6 +34,7 @@ struct StoredBody {
     shape: ShapeKind,
     color: Color,
     destructible: Option<Destructible>,
+    body_type: rphys_scene::BodyType,
 }
 
 // ── PhysicsEngine ─────────────────────────────────────────────────────────────
@@ -264,6 +265,7 @@ impl PhysicsEngine {
                 shape: obj.shape.clone(),
                 color: obj.color,
                 destructible: obj.destructible.clone(),
+                body_type: obj.body_type.clone(),
             },
         );
         self.body_info_map.insert(
@@ -605,6 +607,7 @@ impl PhysicsEngine {
                     shape: stored.shape.clone(),
                     color: stored.color,
                     is_alive: alive,
+                    body_type: stored.body_type.clone(),
                 }
             })
             .collect();

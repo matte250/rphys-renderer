@@ -1,6 +1,6 @@
 //! Public types for the physics simulation engine.
 
-use rphys_scene::{Color, ObjectAudio, ShapeKind, Vec2, WallConfig, WorldBounds};
+use rphys_scene::{BodyType, Color, ObjectAudio, ShapeKind, Vec2, WallConfig, WorldBounds};
 
 // ── Stable object ID ──────────────────────────────────────────────────────────
 
@@ -9,7 +9,7 @@ use rphys_scene::{Color, ObjectAudio, ShapeKind, Vec2, WallConfig, WorldBounds};
 /// Wraps an internal counter ID — does not directly expose rapier handles.
 /// Remains valid even after other bodies have been removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct BodyId(pub(crate) u32);
+pub struct BodyId(pub u32);
 
 // ── Per-body snapshot ─────────────────────────────────────────────────────────
 
@@ -32,6 +32,11 @@ pub struct BodyState {
     pub color: Color,
     /// `true` if the body is still in the simulation.
     pub is_alive: bool,
+    /// Rigid body simulation mode (dynamic / static / kinematic).
+    ///
+    /// Used by the renderer to determine opacity: static bodies are drawn
+    /// at 80% opacity, dynamic and kinematic bodies at full opacity.
+    pub body_type: BodyType,
 }
 
 // ── Full world snapshot ───────────────────────────────────────────────────────
