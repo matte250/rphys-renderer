@@ -32,8 +32,16 @@ struct Cli {
 enum Command {
     /// Export a scene to an MP4 video file.
     Export {
-        /// Path to the `.yaml` scene file.
-        file: PathBuf,
+        /// Path to the `.yaml` scene file (positional).
+        ///
+        /// Either this or `--scene` must be provided.
+        file: Option<PathBuf>,
+
+        /// Path to the `.yaml` scene file (named alternative to the positional argument).
+        ///
+        /// Takes precedence over the positional `file` argument when both are given.
+        #[arg(short = 's', long = "scene")]
+        scene: Option<PathBuf>,
 
         /// Named export preset (controls resolution and frame rate).
         #[arg(short, long, value_enum, default_value = "tiktok")]
@@ -59,6 +67,12 @@ enum Command {
         /// Required when the scene has no end condition.
         #[arg(long)]
         duration: Option<f32>,
+
+        /// Path to the `ffmpeg` binary.
+        ///
+        /// When not provided, `ffmpeg` is looked up on `PATH`.
+        #[arg(long)]
+        ffmpeg: Option<PathBuf>,
     },
 
     /// Open a live preview window for a scene file.
@@ -102,13 +116,32 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Export {
             file,
+            scene,
             preset,
             output,
             width,
             height,
             fps,
             duration,
-        } => run_export(file, preset, output, width, height, fps, duration),
+            ffmpeg,
+        } => {
+            // `--scene` takes precedence over the positional `file` argument.
+            let resolved_file = scene.or(file).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "A scene file is required. Provide it as a positional argument or via --scene <PATH>."
+                )
+            })?;
+            run_export(
+                resolved_file,
+                preset,
+                output,
+                width,
+                height,
+                fps,
+                duration,
+                ffmpeg,
+            )
+        }
         Command::Preview { file } => run_preview(file),
     }
 }
@@ -116,6 +149,7 @@ fn main() -> Result<()> {
 // ── Export handler ────────────────────────────────────────────────────────────
 
 /// Parse `scene_path` and export it to `output_path` using the given options.
+#[allow(clippy::too_many_arguments)]
 fn run_export(
     scene_path: PathBuf,
     preset: CliPreset,
@@ -124,6 +158,7 @@ fn run_export(
     height: Option<u32>,
     fps: Option<u32>,
     duration: Option<f32>,
+    ffmpeg: Option<PathBuf>,
 ) -> Result<()> {
     let scene = rphys_scene::parse_scene_file(&scene_path)
         .with_context(|| format!("Failed to parse scene file '{}'", scene_path.display()))?;
@@ -143,6 +178,9 @@ fn run_export(
     }
     if let Some(d) = duration {
         options.max_duration = Some(d);
+    }
+    if let Some(ffmpeg_path) = ffmpeg {
+        options.ffmpeg_path = Some(ffmpeg_path);
     }
 
     rphys_export::export(&scene, options)
@@ -195,9 +233,58 @@ mod tests {
                 preset,
                 ..
             } => {
-                assert_eq!(file, PathBuf::from("scene.yaml"));
+                assert_eq!(file, Some(PathBuf::from("scene.yaml")));
                 assert_eq!(output, PathBuf::from("out.mp4"));
                 assert!(matches!(preset, CliPreset::TikTok));
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    /// `--scene` named argument is accepted as an alternative to the positional file.
+    #[test]
+    fn test_export_scene_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "rphys",
+            "export",
+            "--scene",
+            "race.yaml",
+            "--output",
+            "out.mp4",
+            "--preset",
+            "tiktok",
+        ])
+        .expect("should parse with --scene flag");
+
+        match cli.command {
+            Command::Export { file, scene, .. } => {
+                assert_eq!(scene, Some(PathBuf::from("race.yaml")));
+                assert!(
+                    file.is_none(),
+                    "--scene should not populate positional file"
+                );
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    /// `--ffmpeg` flag is accepted and parsed correctly.
+    #[test]
+    fn test_export_ffmpeg_flag_parses() {
+        let cli = Cli::try_parse_from([
+            "rphys",
+            "export",
+            "scene.yaml",
+            "--output",
+            "out.mp4",
+            "--ffmpeg",
+            "/usr/local/bin/ffmpeg",
+        ])
+        .expect("should parse with --ffmpeg flag");
+
+        match cli.command {
+            Command::Export { ffmpeg, .. } => {
+                assert_eq!(ffmpeg, Some(PathBuf::from("/usr/local/bin/ffmpeg")));
             }
             _ => panic!("expected Export command"),
         }
@@ -245,6 +332,7 @@ mod tests {
                 fps,
                 duration,
                 preset,
+                ffmpeg,
                 ..
             } => {
                 assert_eq!(width, Some(1280));
@@ -252,6 +340,7 @@ mod tests {
                 assert_eq!(fps, Some(30));
                 assert!((duration.unwrap() - 15.0).abs() < 1e-5);
                 assert!(matches!(preset, CliPreset::Custom));
+                assert!(ffmpeg.is_none());
             }
             _ => panic!("expected Export command"),
         }
@@ -276,6 +365,29 @@ mod tests {
                 assert!(matches!(preset, CliPreset::Youtube));
                 let export_preset = rphys_export::Preset::from(preset);
                 assert!(matches!(export_preset, rphys_export::Preset::YouTube));
+            }
+            _ => panic!("expected Export command"),
+        }
+    }
+
+    /// Smoke test: `--scene` flag routes to the correct scene file.
+    #[test]
+    fn test_scene_flag_is_used_when_no_positional_file() {
+        let cli = Cli::try_parse_from([
+            "rphys",
+            "export",
+            "--scene",
+            "/path/to/race.yaml",
+            "--output",
+            "out.mp4",
+        ])
+        .expect("should parse");
+
+        match cli.command {
+            Command::Export { file, scene, .. } => {
+                // Positional file must be None; --scene must be Some.
+                assert!(file.is_none());
+                assert_eq!(scene, Some(PathBuf::from("/path/to/race.yaml")));
             }
             _ => panic!("expected Export command"),
         }

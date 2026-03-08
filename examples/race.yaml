@@ -1,0 +1,149 @@
+version: "1"
+
+meta:
+  name: "Marble Race"
+  description: "Five marble balls race down a zigzag course to the finish line"
+  author: "rphys"
+  duration_hint: 15.0
+
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#12102a"
+  world_bounds:
+    width: 15.0
+    height: 27.0
+  walls:
+    visible: true
+    color: "#4a4a7a"
+    thickness: 0.3
+
+race:
+  finish_y: 2.0
+  racer_tag: "racer"
+  announcement_hold_secs: 2.0
+  checkpoints:
+    - y: 19.0
+      label: "Checkpoint 1"
+    - y: 13.0
+      label: "Halfway"
+    - y: 6.5
+      label: "Final Stretch"
+
+end_condition:
+  type: or
+  conditions:
+    - type: first_to_reach
+      finish_y: 2.0
+      tag: "racer"
+    - type: time_limit
+      seconds: 15.0
+
+objects:
+  # ── Marble racers ────────────────────────────────────────────────────────────
+
+  - name: "Red"
+    shape: circle
+    radius: 0.45
+    position: [3.0, 25.5]
+    velocity: [0.5, 0.0]
+    material:
+      restitution: 0.35
+      friction: 0.25
+      density: 1.2
+    color: "#e94560"
+    tags: ["racer"]
+
+  - name: "Blue"
+    shape: circle
+    radius: 0.45
+    position: [5.5, 25.5]
+    velocity: [-0.4, 0.0]
+    material:
+      restitution: 0.35
+      friction: 0.25
+      density: 1.2
+    color: "#4488ff"
+    tags: ["racer"]
+
+  - name: "Green"
+    shape: circle
+    radius: 0.45
+    position: [7.5, 25.5]
+    velocity: [0.2, 0.0]
+    material:
+      restitution: 0.35
+      friction: 0.25
+      density: 1.2
+    color: "#44cc66"
+    tags: ["racer"]
+
+  - name: "Yellow"
+    shape: circle
+    radius: 0.45
+    position: [10.0, 25.5]
+    velocity: [-0.3, 0.0]
+    material:
+      restitution: 0.35
+      friction: 0.25
+      density: 1.2
+    color: "#ffdd44"
+    tags: ["racer"]
+
+  - name: "Purple"
+    shape: circle
+    radius: 0.45
+    position: [12.0, 25.5]
+    velocity: [0.3, 0.0]
+    material:
+      restitution: 0.35
+      friction: 0.25
+      density: 1.2
+    color: "#aa44ee"
+    tags: ["racer"]
+
+  # ── Zigzag platforms ─────────────────────────────────────────────────────────
+  # Platforms alternate left/right to create a zigzag path.
+  # Each platform leaves a gap on the opposite side for balls to funnel through.
+  #
+  # World interior (between walls): x ≈ 0.3 to 14.7 (14.4 m wide)
+  # Platform width 9.0 m leaves ~5.4 m gap on the open side.
+
+  # Platform 1 — left side, gap on right (x ≈ 10.5 to 14.7)
+  - shape: rectangle
+    size: [9.0, 0.4]
+    position: [5.0, 22.0]
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 2 — right side, gap on left (x ≈ 0.3 to 4.5)
+  - shape: rectangle
+    size: [9.0, 0.4]
+    position: [10.5, 18.0]
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 3 — left side, gap on right
+  - shape: rectangle
+    size: [9.0, 0.4]
+    position: [5.0, 14.0]
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 4 — right side, gap on left
+  - shape: rectangle
+    size: [9.0, 0.4]
+    position: [10.5, 10.0]
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 5 — center funnel, narrows towards finish
+  - shape: rectangle
+    size: [11.0, 0.4]
+    position: [7.5, 6.0]
+    body_type: static
+    color: "#7a3a6a"
+    tags: []

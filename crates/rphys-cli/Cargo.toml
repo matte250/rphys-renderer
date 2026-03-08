@@ -8,6 +8,10 @@ description = "CLI entry point for rphys-renderer"
 name = "rphys"
 path = "src/main.rs"
 
+[[bin]]
+name = "rphys-cli"
+path = "src/main.rs"
+
 [dependencies]
 anyhow     = { workspace = true }
 clap       = { workspace = true }

@@ -63,6 +63,12 @@ pub struct ExportOptions {
     /// Maximum simulation duration (seconds). Used when the scene has no end
     /// condition; ignored if the scene's `end_condition` fires earlier.
     pub max_duration: Option<f32>,
+    /// Path to the `ffmpeg` binary.
+    ///
+    /// When `None`, `ffmpeg` is resolved from `PATH` (the default behaviour).
+    /// Providing an explicit path is useful when ffmpeg lives outside `PATH`,
+    /// e.g. a statically-linked binary in a custom location.
+    pub ffmpeg_path: Option<PathBuf>,
 }
 
 impl ExportOptions {
@@ -83,6 +89,7 @@ impl ExportOptions {
             fps,
             output_path,
             max_duration: None,
+            ffmpeg_path: None,
         }
     }
 }
@@ -242,7 +249,12 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
             .write_wav(wav_file.path(), duration_secs)
             .map_err(ExportError::Audio)?;
 
-        remux_with_audio(&options.output_path, wav_file.path())?;
+        let ffmpeg_bin = options
+            .ffmpeg_path
+            .as_deref()
+            .map(|p| p.as_os_str().to_owned())
+            .unwrap_or_else(|| std::ffi::OsString::from("ffmpeg"));
+        remux_with_audio(&options.output_path, wav_file.path(), &ffmpeg_bin)?;
     }
 
     Ok(())
@@ -386,7 +398,12 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             .write_wav(wav_file.path(), duration_secs)
             .map_err(ExportError::Audio)?;
 
-        remux_with_audio(&options.output_path, wav_file.path())?;
+        let ffmpeg_bin = options
+            .ffmpeg_path
+            .as_deref()
+            .map(|p| p.as_os_str().to_owned())
+            .unwrap_or_else(|| std::ffi::OsString::from("ffmpeg"));
+        remux_with_audio(&options.output_path, wav_file.path(), &ffmpeg_bin)?;
     }
 
     Ok(())
@@ -450,10 +467,18 @@ fn build_render_context(options: &ExportOptions, scene: &Scene) -> RenderContext
 ///
 /// Raw RGBA frames are read from stdin; output is written directly to
 /// `options.output_path`.
+///
+/// Uses `options.ffmpeg_path` when set; otherwise falls back to `"ffmpeg"`
+/// (resolved via `PATH`).
 fn spawn_ffmpeg_video_only(options: &ExportOptions) -> Result<std::process::Child, ExportError> {
     let size_arg = format!("{}x{}", options.width, options.height);
+    let ffmpeg_bin = options
+        .ffmpeg_path
+        .as_deref()
+        .map(|p| p.as_os_str())
+        .unwrap_or_else(|| std::ffi::OsStr::new("ffmpeg"));
 
-    let child = Command::new("ffmpeg")
+    let child = Command::new(ffmpeg_bin)
         .args([
             "-y", // overwrite output
             "-f",
@@ -497,16 +522,18 @@ fn spawn_ffmpeg_video_only(options: &ExportOptions) -> Result<std::process::Chil
 /// Re-mux the existing video file with an audio WAV track in-place.
 ///
 /// The output file is a temporary sibling and then renamed over the original.
+/// `ffmpeg_bin` is the path (or name) of the ffmpeg binary to invoke.
 fn remux_with_audio(
     output_path: &std::path::Path,
     wav_path: &std::path::Path,
+    ffmpeg_bin: &std::ffi::OsStr,
 ) -> Result<(), ExportError> {
     let parent = output_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     let tmp_path = parent.join("__rphys_export_tmp.mp4");
 
-    let output = Command::new("ffmpeg")
+    let output = Command::new(ffmpeg_bin)
         .args(["-y", "-i"])
         .arg(output_path)
         .args(["-i"])
@@ -703,6 +730,7 @@ mod tests {
             fps: 1,
             output_path: tmp.path().to_path_buf(),
             max_duration: Some(0.1),
+            ffmpeg_path: None,
         };
 
         // Use a fake binary name to force NotFound.
@@ -746,6 +774,7 @@ mod tests {
             fps: 10,
             output_path: output.clone(),
             max_duration: Some(1.0),
+            ffmpeg_path: None,
         };
 
         let result = export(&scene, opts);
@@ -775,7 +804,8 @@ mod tests {
             height: 64,
             fps: 10,
             output_path: tmp.path().to_path_buf(),
-            max_duration: None, // explicitly unset
+            max_duration: None,
+            ffmpeg_path: None, // explicitly unset
         };
 
         let result = export(&scene, opts);
@@ -802,6 +832,7 @@ mod tests {
             fps: 1,
             output_path: PathBuf::from("x.mp4"),
             max_duration: Some(42.0),
+            ffmpeg_path: None,
         };
         let d = resolve_max_duration(&scene, &opts).expect("should resolve");
         assert!((d - 42.0).abs() < 1e-5);
@@ -817,6 +848,7 @@ mod tests {
             fps: 1,
             output_path: PathBuf::from("x.mp4"),
             max_duration: None,
+            ffmpeg_path: None,
         };
         let d = resolve_max_duration(&scene, &opts).expect("should resolve");
         assert!((d - 1.0).abs() < 1e-5);
@@ -834,6 +866,7 @@ mod tests {
             fps: 1,
             output_path: PathBuf::from("x.mp4"),
             max_duration: None,
+            ffmpeg_path: None,
         };
         let d = resolve_max_duration(&scene, &opts).expect("should resolve");
         assert!((d - 5.0).abs() < 1e-5);
@@ -927,6 +960,7 @@ mod tests {
             fps: 10,
             output_path: output.clone(),
             max_duration: Some(0.5),
+            ffmpeg_path: None,
         };
 
         let result = export(&scene, opts);
@@ -961,6 +995,7 @@ mod tests {
             fps: 10,
             output_path: tmp.path().to_path_buf(),
             max_duration: Some(0.5),
+            ffmpeg_path: None,
         };
 
         let result = export(&scene, opts);
@@ -1000,6 +1035,7 @@ mod tests {
             fps: 10,
             output_path: output.clone(),
             max_duration: Some(0.5),
+            ffmpeg_path: None,
         };
 
         let result = export(&scene, opts);
