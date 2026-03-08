@@ -7,6 +7,4 @@
 
 mod types;
 
-pub use types::{
-    FinishedEntry, RaceError, RaceEvent, RaceState, RacerStatus, WinnerInfo,
-};
+pub use types::{FinishedEntry, RaceError, RaceEvent, RaceState, RacerStatus, WinnerInfo};

@@ -210,10 +210,7 @@ mod tests {
             .draw_winner_announcement(&mut frame, &race_state)
             .unwrap();
 
-        assert_eq!(
-            frame.pixels, before,
-            "no winner → no pixels should change"
-        );
+        assert_eq!(frame.pixels, before, "no winner → no pixels should change");
     }
 
     // ── Test: text clipping at frame edges ────────────────────────────────────

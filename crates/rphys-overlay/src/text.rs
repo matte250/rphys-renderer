@@ -31,16 +31,6 @@ impl TextRenderer {
         Self { font }
     }
 
-    /// Fallible constructor — returns `Err` if the embedded font is malformed.
-    ///
-    /// In practice this never fails since the font bytes are baked in at
-    /// compile time. Prefer [`Self::new`] in contexts where panicking is
-    /// acceptable.
-    pub(crate) fn try_new() -> Result<Self, &'static str> {
-        let font = Font::from_bytes(FONT_BYTES, FontSettings::default())?;
-        Ok(Self { font })
-    }
-
     /// Rasterise `text` and alpha-blend it into `frame`.
     ///
     /// `(x, y)` is the **top-left** corner of the text line in pixel space.
@@ -237,15 +227,7 @@ mod tests {
         // Draw text at x=-1000, y=-1000 — should not panic
         let tr = TextRenderer::new();
         let mut frame = Frame::new(100, 100);
-        tr.draw_text(
-            &mut frame,
-            "Hello",
-            -1000,
-            -1000,
-            18.0,
-            Color::WHITE,
-            1.0,
-        );
+        tr.draw_text(&mut frame, "Hello", -1000, -1000, 18.0, Color::WHITE, 1.0);
     }
 
     #[test]
@@ -253,15 +235,7 @@ mod tests {
         // Draw text far off-screen to the right — should not panic
         let tr = TextRenderer::new();
         let mut frame = Frame::new(100, 100);
-        tr.draw_text(
-            &mut frame,
-            "Hello",
-            99_000,
-            0,
-            18.0,
-            Color::WHITE,
-            1.0,
-        );
+        tr.draw_text(&mut frame, "Hello", 99_000, 0, 18.0, Color::WHITE, 1.0);
     }
 
     #[test]

@@ -167,8 +167,15 @@ impl OverlayRenderer {
             0.85,
         );
         // Foreground in winner's color.
-        self.text
-            .draw_text(frame, &winner_text, text_x, text_y, WINNER_FONT_SIZE, winner.color, 1.0);
+        self.text.draw_text(
+            frame,
+            &winner_text,
+            text_x,
+            text_y,
+            WINNER_FONT_SIZE,
+            winner.color,
+            1.0,
+        );
 
         // ── Subtitle: finish time ─────────────────────────────────────────────
         let subtitle = format!("Time: {:.2}s", winner.finish_time_secs);
@@ -186,12 +193,19 @@ impl OverlayRenderer {
             SHADOW_COLOR,
             0.85,
         );
-        self.text
-            .draw_text(frame, &subtitle, sub_x, sub_y, SUBTITLE_FONT_SIZE, Color::WHITE, 1.0);
+        self.text.draw_text(
+            frame,
+            &subtitle,
+            sub_x,
+            sub_y,
+            SUBTITLE_FONT_SIZE,
+            Color::WHITE,
+            1.0,
+        );
 
         // ── Additional finishers ──────────────────────────────────────────────
-        let mut line_y = sub_y + self.text.measure(&subtitle, SUBTITLE_FONT_SIZE).1 as i32
-            + PANEL_PADDING;
+        let mut line_y =
+            sub_y + self.text.measure(&subtitle, SUBTITLE_FONT_SIZE).1 as i32 + PANEL_PADDING;
 
         for entry in &race_state.finished {
             if entry.body_id == winner.body_id {
@@ -200,11 +214,21 @@ impl OverlayRenderer {
             if line_y >= fh - PANEL_PADDING {
                 break;
             }
-            let entry_text = format!("{}. {}  {:.2}s", entry.finish_rank, entry.display_name, entry.finish_time_secs);
+            let entry_text = format!(
+                "{}. {}  {:.2}s",
+                entry.finish_rank, entry.display_name, entry.finish_time_secs
+            );
             let (ew, _) = self.text.measure(&entry_text, NAME_FONT_SIZE);
             let entry_x = ((fw - ew as i32) / 2).max(PANEL_PADDING);
-            self.text
-                .draw_text(frame, &entry_text, entry_x, line_y, NAME_FONT_SIZE, entry.color, 1.0);
+            self.text.draw_text(
+                frame,
+                &entry_text,
+                entry_x,
+                line_y,
+                NAME_FONT_SIZE,
+                entry.color,
+                1.0,
+            );
             line_y += self.text.measure(&entry_text, NAME_FONT_SIZE).1 as i32 + 4;
         }
 
@@ -220,14 +244,7 @@ impl OverlayRenderer {
             return;
         }
 
-        draw_hline(
-            frame,
-            pixel_y,
-            0,
-            frame.width as i32,
-            FINISH_LINE_COLOR,
-            3,
-        );
+        draw_hline(frame, pixel_y, 0, frame.width as i32, FINISH_LINE_COLOR, 3);
 
         // "FINISH" label 8 px above the line.
         let label = "FINISH";
@@ -277,7 +294,11 @@ impl OverlayRenderer {
     }
 
     /// Draw the leaderboard panel in the top-right corner.
-    fn draw_leaderboard(&self, frame: &mut Frame, race_state: &RaceState) -> Result<(), OverlayError> {
+    fn draw_leaderboard(
+        &self,
+        frame: &mut Frame,
+        race_state: &RaceState,
+    ) -> Result<(), OverlayError> {
         let total_racers = race_state.finished.len() + race_state.active.len();
         if total_racers == 0 {
             return Ok(());
@@ -365,7 +386,15 @@ fn draw_leaderboard_row_finished(
 
     // Dimmed to indicate the racer is done.
     let dimmed_color = Color::rgba(entry.color.r, entry.color.g, entry.color.b, 160);
-    text.draw_text(frame, &label, text_x, text_y, NAME_FONT_SIZE, dimmed_color, 0.85);
+    text.draw_text(
+        frame,
+        &label,
+        text_x,
+        text_y,
+        NAME_FONT_SIZE,
+        dimmed_color,
+        0.85,
+    );
 }
 
 /// Draw a leaderboard row for an active (still-racing) racer.
@@ -386,7 +415,15 @@ fn draw_leaderboard_row_active(
     let text_x = chip_x + CHIP_SIZE + 6;
     let text_y = row_y + (ROW_HEIGHT - RANK_FONT_SIZE as i32) / 2;
 
-    text.draw_text(frame, &label, text_x, text_y, RANK_FONT_SIZE, racer.color, 1.0);
+    text.draw_text(
+        frame,
+        &label,
+        text_x,
+        text_y,
+        RANK_FONT_SIZE,
+        racer.color,
+        1.0,
+    );
 }
 
 /// Draw an 8×8 filled color chip at `(x, y)`.
