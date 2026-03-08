@@ -5,6 +5,8 @@
 //! [`PhysicsEngine`](rphys_physics::PhysicsEngine) and enriches each step with
 //! rank tracking, checkpoint detection, and finish-line events.
 
+mod tracker;
 mod types;
 
+pub use tracker::RaceTracker;
 pub use types::{FinishedEntry, RaceError, RaceEvent, RaceState, RacerStatus, WinnerInfo};

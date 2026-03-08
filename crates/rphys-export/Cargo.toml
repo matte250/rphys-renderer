@@ -11,3 +11,5 @@ rphys-scene    = { workspace = true }
 rphys-physics  = { path = "../rphys-physics" }
 rphys-renderer = { path = "../rphys-renderer" }
 rphys-audio    = { path = "../rphys-audio" }
+rphys-race     = { path = "../rphys-race" }
+rphys-overlay  = { path = "../rphys-overlay" }

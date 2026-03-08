@@ -21,8 +21,11 @@ use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use rphys_audio::{AudioEvent, OfflineAudioMixer};
+use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
-use rphys_renderer::{RenderContext, Renderer, TinySkiaRenderer};
+use rphys_race::RaceTracker;
+use rphys_renderer::{CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
+    StaticCamera, TinySkiaRenderer};
 use rphys_scene::{Scene, Vec2};
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -115,6 +118,14 @@ pub enum ExportError {
     /// The scene has no end condition and `max_duration` was not set.
     #[error("Scene has no end condition and no max_duration was specified")]
     NoDuration,
+
+    /// Race tracker error.
+    #[error("Race error: {0}")]
+    Race(#[from] rphys_race::RaceError),
+
+    /// Overlay rendering error.
+    #[error("Overlay error: {0}")]
+    Overlay(#[from] rphys_overlay::OverlayError),
 }
 
 // ── Public export entry point ─────────────────────────────────────────────────
