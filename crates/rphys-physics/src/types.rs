@@ -95,7 +95,7 @@ pub enum PhysicsEvent {
 }
 
 /// Reason a simulation reached its end condition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CompletionReason {
     /// The time limit was reached.
     TimeLimitReached,
@@ -122,6 +122,18 @@ pub enum CompletionReason {
         tag_a: String,
         /// Second tag.
         tag_b: String,
+    },
+    /// The first body to reach a tagged zone won the race.
+    ///
+    /// Detected by `rphys-race` (Sprint 2 Wave 2); the physics engine
+    /// itself never emits this variant.
+    FirstToReach {
+        /// The tag of the finish zone that was reached.
+        tag: String,
+        /// The body that arrived first.
+        winner_body: BodyId,
+        /// Optional display name of the winning body.
+        winner_name: Option<String>,
     },
 }
 
