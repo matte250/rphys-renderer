@@ -680,7 +680,11 @@ dependencies = [
 name = "rphys-export"
 version = "0.1.0"
 dependencies = [
+ "rphys-audio",
+ "rphys-physics",
+ "rphys-renderer",
  "rphys-scene",
+ "tempfile",
  "thiserror",
 ]
 
