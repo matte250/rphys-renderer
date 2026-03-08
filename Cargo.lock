@@ -813,6 +813,7 @@ name = "rphys-overlay"
 version = "0.1.0"
 dependencies = [
  "fontdue",
+ "rphys-physics",
  "rphys-race",
  "rphys-renderer",
  "rphys-scene",

@@ -10,3 +10,6 @@ rphys-race     = { path = "../rphys-race" }
 rphys-scene    = { path = "../rphys-scene" }
 fontdue        = { workspace = true }
 thiserror      = { workspace = true }
+
+[dev-dependencies]
+rphys-physics  = { path = "../rphys-physics" }
