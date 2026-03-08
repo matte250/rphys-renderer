@@ -1,5 +1,8 @@
 //! CPU software renderer using `tiny-skia`.
 //!
+//! Also provides the [`CameraController`] trait and built-in implementations
+//! ([`StaticCamera`], [`RaceCamera`]) for Sprint 2 race-mode support.
+//!
 //! Converts a [`PhysicsState`] snapshot into a raw RGBA [`Frame`] buffer.
 //!
 //! ## Coordinate system
@@ -16,6 +19,9 @@
 //!
 //! - Dynamic / kinematic bodies: rendered at full opacity.
 //! - Static bodies: rendered at 80% of their defined alpha.
+
+pub mod camera;
+pub use camera::{CameraController, RaceCamera, RaceCameraConfig, StaticCamera};
 
 use rphys_physics::types::{BodyState, PhysicsState};
 use rphys_scene::{BodyType, Color, ShapeKind, Vec2};
