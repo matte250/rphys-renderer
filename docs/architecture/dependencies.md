@@ -2,6 +2,9 @@
 
 Recommended crates for the MVP, with rationale.
 
+> **⚠️ IMPORTANT: Always verify latest versions on crates.io before implementing.**
+> The version numbers below are approximate — they reflect the time of writing, NOT necessarily the latest release. Before adding any dependency to Cargo.toml, run `cargo search <crate>` or check https://crates.io/<crate> for the actual latest stable version.
+
 ## Core
 
 | Crate | Version | Used by | Purpose |

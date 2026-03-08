@@ -9,6 +9,13 @@ A CLI tool for creating physics simulation videos from declarative YAML scene de
 - `cargo clippy -- -D warnings` — must pass clean
 - All public APIs get `///` doc comments
 
+## Dependencies
+- **ALWAYS check crates.io for the latest version** before adding any dependency
+- Never use hardcoded versions from memory — LLM training data is stale
+- Run `cargo search <crate>` or check https://crates.io/<crate> to verify
+- Pin to the latest stable major version (e.g., `"2"` not `"1"` if 2.x exists)
+- If a crate API has changed in a newer version, use the NEW API, not the old one
+
 ## Code Standards
 - No `.unwrap()` in production code — use proper error handling
 - `thiserror` for library error types, `anyhow` for CLI/application errors
