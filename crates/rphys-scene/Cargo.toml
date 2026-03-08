@@ -1,0 +1,10 @@
+[package]
+name = "rphys-scene"
+version = "0.1.0"
+edition = "2021"
+description = "YAML scene parser and model for rphys-renderer"
+
+[dependencies]
+serde     = { workspace = true }
+serde_yml = { workspace = true }
+thiserror = { workspace = true }

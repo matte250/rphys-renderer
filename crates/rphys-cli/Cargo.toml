@@ -1,0 +1,14 @@
+[package]
+name = "rphys-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI entry point for rphys-renderer"
+
+[[bin]]
+name = "rphys"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+# clap = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }

@@ -1,0 +1,11 @@
+[package]
+name = "rphys-audio"
+version = "0.1.0"
+edition = "2021"
+description = "Event-driven audio engine for rphys-renderer"
+
+[dependencies]
+thiserror = { workspace = true }
+# rodio  = { workspace = true }  # Uncomment when implementing
+# hound  = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }

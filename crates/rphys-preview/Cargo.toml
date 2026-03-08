@@ -1,0 +1,12 @@
+[package]
+name = "rphys-preview"
+version = "0.1.0"
+edition = "2021"
+description = "Live preview window for rphys-renderer"
+
+[dependencies]
+thiserror = { workspace = true }
+# winit  = { workspace = true }  # Uncomment when implementing
+# pixels = { workspace = true }  # Uncomment when implementing
+# notify = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "rphys-renderer"
+version = "0.1.0"
+edition = "2021"
+description = "CPU software renderer for rphys-renderer"
+
+[dependencies]
+thiserror = { workspace = true }
+# tiny-skia = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }

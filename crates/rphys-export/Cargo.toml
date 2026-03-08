@@ -1,0 +1,10 @@
+[package]
+name = "rphys-export"
+version = "0.1.0"
+edition = "2021"
+description = "Video export pipeline for rphys-renderer"
+
+[dependencies]
+thiserror = { workspace = true }
+# tempfile = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }

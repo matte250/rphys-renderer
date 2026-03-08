@@ -1,0 +1,10 @@
+[package]
+name = "rphys-physics"
+version = "0.1.0"
+edition = "2021"
+description = "Physics simulation engine for rphys-renderer"
+
+[dependencies]
+thiserror = { workspace = true }
+# rapier2d = { workspace = true }  # Uncomment when implementing
+rphys-scene = { workspace = true }
