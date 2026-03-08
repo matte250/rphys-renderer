@@ -244,6 +244,53 @@ pub struct Environment {
     pub walls: WallConfig,
 }
 
+// ── Race types ────────────────────────────────────────────────────────────────
+
+/// A visual checkpoint line at a world Y coordinate.
+///
+/// Checkpoints are optional milestone markers displayed as horizontal lines
+/// in the race overlay. They do not affect ranking.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Checkpoint {
+    /// World Y coordinate of this checkpoint.
+    pub y: f32,
+    /// Optional label rendered alongside the checkpoint line in the overlay.
+    pub label: Option<String>,
+}
+
+/// Configuration for a race scene.
+///
+/// Present only when the `race:` key exists in the YAML. Its presence signals
+/// that race mode should be used for both export and preview.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RaceConfig {
+    /// World Y coordinate of the finish line.
+    ///
+    /// The race ends when any racer's Y ≤ this value. Must be >= 0.
+    pub finish_y: f32,
+    /// Tag that identifies racer bodies. Default: `"racer"`.
+    pub racer_tag: String,
+    /// How long (in seconds) to hold the winner frame at the end of export.
+    ///
+    /// Must be > 0. Default: 2.0.
+    pub announcement_hold_secs: f32,
+    /// Optional milestone Y-coordinates shown as horizontal lines with labels.
+    ///
+    /// Each checkpoint `y` must be greater than `finish_y`.
+    pub checkpoints: Vec<Checkpoint>,
+}
+
+impl Default for RaceConfig {
+    fn default() -> Self {
+        Self {
+            finish_y: 0.0,
+            racer_tag: "racer".to_string(),
+            announcement_hold_secs: 2.0,
+            checkpoints: Vec::new(),
+        }
+    }
+}
+
 // ── End conditions ────────────────────────────────────────────────────────────
 
 /// Condition that terminates the simulation when satisfied.
@@ -290,6 +337,17 @@ pub enum EndCondition {
     Or {
         /// Sub-conditions, any one of which is sufficient.
         conditions: Vec<EndCondition>,
+    },
+    /// Race condition: fires when the first body tagged with `tag` crosses
+    /// below `finish_y`.
+    ///
+    /// The `tag` field should match `RaceConfig::racer_tag` when used together
+    /// with a `race:` section.
+    FirstToReach {
+        /// World Y coordinate of the finish line. Must be >= 0.
+        finish_y: f32,
+        /// Tag identifying racer bodies. Default when omitted in YAML: `"racer"`.
+        tag: String,
     },
 }
 
@@ -357,4 +415,8 @@ pub struct Scene {
     pub end_condition: Option<EndCondition>,
     /// Global audio configuration.
     pub audio: SceneAudio,
+    /// Present when the scene is a race. `None` for non-race scenes.
+    ///
+    /// When `Some`, race mode is used for both export and preview.
+    pub race: Option<RaceConfig>,
 }

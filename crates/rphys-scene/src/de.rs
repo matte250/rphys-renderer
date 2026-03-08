@@ -24,6 +24,7 @@ pub(crate) struct RawScene {
     pub objects: Vec<RawObject>,
     pub end_condition: Option<RawEndCondition>,
     pub audio: Option<RawSceneAudio>,
+    pub race: Option<RawRaceConfig>,
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
@@ -117,6 +118,25 @@ pub(crate) struct RawObjectAudio {
     pub destroy: Option<String>,
 }
 
+// ── Race types ────────────────────────────────────────────────────────────────
+
+/// Raw checkpoint entry — a milestone Y-coordinate in a race scene.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawCheckpoint {
+    pub y: f32,
+    pub label: Option<String>,
+}
+
+/// Raw race configuration — mirrors the `race:` YAML block.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawRaceConfig {
+    pub finish_y: f32,
+    pub racer_tag: Option<String>,
+    pub announcement_hold_secs: Option<f32>,
+    #[serde(default)]
+    pub checkpoints: Vec<RawCheckpoint>,
+}
+
 // ── End conditions ────────────────────────────────────────────────────────────
 
 /// End condition — internally tagged by the `type` field.
@@ -132,6 +152,7 @@ pub(crate) enum RawEndCondition {
     TagsCollided { tag_a: String, tag_b: String },
     And { conditions: Vec<RawEndCondition> },
     Or { conditions: Vec<RawEndCondition> },
+    FirstToReach { finish_y: f32, tag: Option<String> },
 }
 
 // ── Global audio ──────────────────────────────────────────────────────────────

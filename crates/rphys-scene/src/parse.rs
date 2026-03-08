@@ -8,11 +8,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::de::{
-    RawEndCondition, RawEnvironment, RawObject, RawScene, RawSceneAudio, RawWallConfig,
+    RawEndCondition, RawEnvironment, RawObject, RawRaceConfig, RawScene, RawSceneAudio,
+    RawWallConfig,
 };
 use crate::types::{
-    BodyType, Color, Destructible, EndCondition, Environment, Material, ObjectAudio, Scene,
-    SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
+    BodyType, Checkpoint, Color, Destructible, EndCondition, Environment, Material, ObjectAudio,
+    RaceConfig, Scene, SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig,
+    WorldBounds,
 };
 
 // ── Error types ───────────────────────────────────────────────────────────────
@@ -191,6 +193,12 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
     // Convert global audio.
     let audio = convert_scene_audio(raw.audio.as_ref(), base_dir, &mut errors);
 
+    // Convert race config (optional).
+    let race = raw
+        .race
+        .as_ref()
+        .and_then(|rc| convert_race_config(rc, &mut errors));
+
     if !errors.is_empty() {
         return Err(ParseError::Validation(errors));
     }
@@ -216,6 +224,7 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         objects,
         end_condition,
         audio,
+        race,
     })
 }
 
@@ -640,6 +649,19 @@ fn convert_end_condition(
                 None
             }
         }
+        RawEndCondition::FirstToReach { finish_y, tag } => {
+            if *finish_y < 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: "end_condition.first_to_reach".to_string(),
+                    message: format!("first_to_reach.finish_y must be >= 0, got {finish_y}"),
+                });
+                return None;
+            }
+            Some(EndCondition::FirstToReach {
+                finish_y: *finish_y,
+                tag: tag.clone().unwrap_or_else(|| "racer".to_string()),
+            })
+        }
     }
 }
 
@@ -730,6 +752,68 @@ fn convert_scene_audio(
         default_destroy,
         master_volume,
     }
+}
+
+/// Convert a `RawRaceConfig` into a [`RaceConfig`], recording validation errors.
+///
+/// Returns `None` if any validation rule is violated.
+fn convert_race_config(
+    raw: &RawRaceConfig,
+    errors: &mut Vec<ValidationError>,
+) -> Option<RaceConfig> {
+    let finish_y = raw.finish_y;
+    let racer_tag = raw.racer_tag.clone().unwrap_or_else(|| "racer".to_string());
+    let announcement_hold_secs = raw.announcement_hold_secs.unwrap_or(2.0);
+
+    let mut ok = true;
+
+    if finish_y < 0.0 {
+        errors.push(ValidationError::InvalidValue {
+            name: "race.finish_y".to_string(),
+            message: format!("race.finish_y must be >= 0, got {finish_y}"),
+        });
+        ok = false;
+    }
+
+    if announcement_hold_secs <= 0.0 {
+        errors.push(ValidationError::InvalidValue {
+            name: "race.announcement_hold_secs".to_string(),
+            message: format!(
+                "race.announcement_hold_secs must be > 0, got {announcement_hold_secs}"
+            ),
+        });
+        ok = false;
+    }
+
+    let mut checkpoints: Vec<Checkpoint> = Vec::new();
+    for (i, raw_cp) in raw.checkpoints.iter().enumerate() {
+        if raw_cp.y <= finish_y {
+            errors.push(ValidationError::InvalidValue {
+                name: format!("race.checkpoints[{i}]"),
+                message: format!(
+                    "checkpoint y ({}) must be > finish_y ({finish_y})",
+                    raw_cp.y
+                ),
+            });
+            ok = false;
+        } else {
+            checkpoints.push(Checkpoint {
+                y: raw_cp.y,
+                label: raw_cp.label.clone(),
+            });
+        }
+    }
+
+    if !ok {
+        return None;
+    }
+
+    Some(RaceConfig {
+        finish_y,
+        racer_tag,
+        announcement_hold_secs,
+        checkpoints,
+    })
 }
 
 // ── Low-level helpers ─────────────────────────────────────────────────────────
@@ -1997,6 +2081,271 @@ objects: []
         } else {
             panic!("expected Validation error, got {err:?}");
         }
+    }
+
+    // ── Race / Sprint 2 tests ─────────────────────────────────────────────────
+
+    /// Helper: build a minimal YAML string with an optional suffix appended.
+    fn minimal_yaml_with(extra: &str) -> String {
+        format!("{}{}", minimal_yaml(), extra)
+    }
+
+    #[test]
+    fn test_parse_race_config_full() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  racer_tag: "racer"
+  announcement_hold_secs: 3.0
+  checkpoints:
+    - y: 28.0
+      label: "Checkpoint 1"
+    - y: 15.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse race config");
+        let race = scene.race.as_ref().expect("race should be Some");
+        assert!((race.finish_y - 2.0).abs() < 1e-6);
+        assert_eq!(race.racer_tag, "racer");
+        assert!((race.announcement_hold_secs - 3.0).abs() < 1e-6);
+        assert_eq!(race.checkpoints.len(), 2);
+        assert!((race.checkpoints[0].y - 28.0).abs() < 1e-6);
+        assert_eq!(race.checkpoints[0].label.as_deref(), Some("Checkpoint 1"));
+        assert!((race.checkpoints[1].y - 15.0).abs() < 1e-6);
+        assert!(race.checkpoints[1].label.is_none());
+    }
+
+    #[test]
+    fn test_parse_race_config_defaults() {
+        // racer_tag and announcement_hold_secs should use defaults when omitted.
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 0.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse race with defaults");
+        let race = scene.race.as_ref().expect("race should be Some");
+        assert_eq!(race.racer_tag, "racer");
+        assert!((race.announcement_hold_secs - 2.0).abs() < 1e-6);
+        assert!(race.checkpoints.is_empty());
+    }
+
+    #[test]
+    fn test_parse_race_config_absent_gives_none() {
+        // Scenes without a race: section should have race = None.
+        let scene = parse_scene(minimal_yaml()).expect("should parse");
+        assert!(scene.race.is_none());
+    }
+
+    #[test]
+    fn test_race_finish_y_must_not_be_negative() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: -1.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "race.finish_y" && message.contains("finish_y")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_race_announcement_hold_secs_must_be_positive() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  announcement_hold_secs: 0.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, .. }
+                    if name == "race.announcement_hold_secs"
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_race_checkpoint_y_must_exceed_finish_y() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 10.0
+  checkpoints:
+    - y: 5.0
+      label: "Below finish line"
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name.starts_with("race.checkpoints") && message.contains("finish_y")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_parse_end_condition_first_to_reach() {
+        let yaml = minimal_yaml_with(
+            r#"end_condition:
+  type: first_to_reach
+  finish_y: 2.0
+  tag: "racer"
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse first_to_reach");
+        assert!(matches!(
+            scene.end_condition,
+            Some(EndCondition::FirstToReach { finish_y, ref tag })
+                if (finish_y - 2.0).abs() < 1e-6 && tag == "racer"
+        ));
+    }
+
+    #[test]
+    fn test_parse_first_to_reach_default_tag() {
+        // tag is optional, defaults to "racer".
+        let yaml = minimal_yaml_with(
+            r#"end_condition:
+  type: first_to_reach
+  finish_y: 0.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse first_to_reach with default tag");
+        if let Some(EndCondition::FirstToReach { tag, .. }) = &scene.end_condition {
+            assert_eq!(tag, "racer");
+        } else {
+            panic!("expected FirstToReach end condition");
+        }
+    }
+
+    #[test]
+    fn test_first_to_reach_negative_finish_y_rejected() {
+        let yaml = minimal_yaml_with(
+            r#"end_condition:
+  type: first_to_reach
+  finish_y: -5.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "end_condition.first_to_reach" && message.contains("finish_y")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_first_to_reach_inside_or_composite() {
+        // FirstToReach can be nested inside an Or composite.
+        let yaml = minimal_yaml_with(
+            r#"end_condition:
+  type: or
+  conditions:
+    - type: first_to_reach
+      finish_y: 2.0
+    - type: time_limit
+      seconds: 120.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse Or with FirstToReach");
+        if let Some(EndCondition::Or { conditions }) = &scene.end_condition {
+            assert_eq!(conditions.len(), 2);
+            assert!(matches!(
+                conditions[0],
+                EndCondition::FirstToReach { finish_y, ref tag }
+                    if (finish_y - 2.0).abs() < 1e-6 && tag == "racer"
+            ));
+            assert!(matches!(conditions[1], EndCondition::TimeLimit { .. }));
+        } else {
+            panic!("expected Or end condition");
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_label_is_optional() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 1.0
+  checkpoints:
+    - y: 20.0
+    - y: 10.0
+      label: "Halfway"
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse checkpoints");
+        let checkpoints = &scene.race.as_ref().unwrap().checkpoints;
+        assert_eq!(checkpoints.len(), 2);
+        assert!(checkpoints[0].label.is_none());
+        assert_eq!(checkpoints[1].label.as_deref(), Some("Halfway"));
+    }
+
+    #[test]
+    fn test_race_config_finish_y_at_zero_is_valid() {
+        // finish_y = 0.0 is exactly at the boundary and should be accepted.
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 0.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("finish_y=0.0 should be valid");
+        assert!((scene.race.unwrap().finish_y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_first_to_reach_finish_y_at_zero_is_valid() {
+        let yaml = minimal_yaml_with(
+            r#"end_condition:
+  type: first_to_reach
+  finish_y: 0.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("first_to_reach finish_y=0.0 should be valid");
+        assert!(matches!(
+            scene.end_condition,
+            Some(EndCondition::FirstToReach { finish_y, .. }) if finish_y.abs() < 1e-6
+        ));
+    }
+
+    #[test]
+    fn test_race_and_first_to_reach_together() {
+        // Real-world usage: race config + first_to_reach end condition.
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  racer_tag: "racer"
+  checkpoints:
+    - y: 28.0
+      label: "Checkpoint 1"
+end_condition:
+  type: first_to_reach
+  finish_y: 2.0
+  tag: "racer"
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse race + first_to_reach");
+        assert!(scene.race.is_some());
+        assert!(matches!(
+            scene.end_condition,
+            Some(EndCondition::FirstToReach { .. })
+        ));
     }
 
     #[test]

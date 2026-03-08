@@ -499,6 +499,7 @@ mod tests {
             }],
             end_condition: Some(rphys_scene::EndCondition::TimeLimit { seconds: 1.0 }),
             audio: SceneAudio::default(),
+            race: None,
         }
     }
 

@@ -81,7 +81,10 @@ fn main() {
 
     // Use unlimited steps per call so advance_to() actually reaches the target time.
     // (Default max_steps_per_call=8 is designed for real-time preview, not offline use.)
-    let config = PhysicsConfig { max_steps_per_call: u32::MAX, ..PhysicsConfig::default() };
+    let config = PhysicsConfig {
+        max_steps_per_call: u32::MAX,
+        ..PhysicsConfig::default()
+    };
     let mut engine = PhysicsEngine::new(&scene, config).expect("physics init failed");
 
     // Step to t=0.6s so the balls are mid-fall
@@ -93,7 +96,12 @@ fn main() {
         height: 800,
         camera_origin: Vec2 { x: 0.0, y: 0.0 },
         scale: 40.0,
-        background_color: Color { r: 26, g: 26, b: 46, a: 255 },
+        background_color: Color {
+            r: 26,
+            g: 26,
+            b: 46,
+            a: 255,
+        },
     };
 
     let renderer = TinySkiaRenderer;
@@ -106,7 +114,9 @@ fn main() {
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().expect("write PNG header");
-    writer.write_image_data(&frame.pixels).expect("write PNG data");
+    writer
+        .write_image_data(&frame.pixels)
+        .expect("write PNG data");
 
     println!("✓ Rendered frame → {}", out_path.display());
     println!("  Bodies: {}", state.bodies.len());

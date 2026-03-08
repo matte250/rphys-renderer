@@ -551,6 +551,8 @@ impl PhysicsEngine {
                 }
                 None
             }
+            // FirstToReach is evaluated by rphys-race, not the physics engine.
+            EndCondition::FirstToReach { .. } => None,
         }
     }
 
@@ -717,6 +719,7 @@ mod tests {
             objects,
             end_condition: None,
             audio: SceneAudio::default(),
+            race: None,
         }
     }
 

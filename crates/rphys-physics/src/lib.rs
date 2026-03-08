@@ -21,6 +21,7 @@
 //! #         objects: vec![],
 //! #         end_condition: None,
 //! #         audio: SceneAudio::default(),
+//! #         race: None,
 //! #     }
 //! # }
 //!
