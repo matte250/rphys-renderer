@@ -6,6 +6,8 @@ description = "Event-driven audio engine for rphys-renderer"
 
 [dependencies]
 thiserror = { workspace = true }
-# rodio  = { workspace = true }  # Uncomment when implementing
-# hound  = { workspace = true }  # Uncomment when implementing
+hound     = { workspace = true }
 rphys-scene = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
