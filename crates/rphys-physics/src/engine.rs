@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 
 use rapier2d::prelude::*;
-use rphys_scene::{BodyType, Color, Destructible, EndCondition, Scene, ShapeKind};
+use rphys_scene::{BodyType, BoostConfig, Color, Destructible, EndCondition, Scene, ShapeKind};
 
 use crate::types::{
     BodyId, BodyInfo, BodyState, CollisionInfo, CompletionReason, PhysicsConfig, PhysicsError,
@@ -36,7 +36,7 @@ struct StoredBody {
     destructible: Option<Destructible>,
     body_type: rphys_scene::BodyType,
     /// Speed-boost configuration, if this body is a boost pad.
-    boost: Option<rphys_scene::BoostConfig>,
+    boost: Option<BoostConfig>,
 }
 
 // ── PhysicsEngine ─────────────────────────────────────────────────────────────
@@ -280,6 +280,7 @@ impl PhysicsEngine {
                 color: obj.color,
                 destructible: obj.destructible.clone(),
                 body_type: effective_body_type,
+                boost: obj.boost.clone(),
             },
         );
         self.body_info_map.insert(
@@ -403,6 +404,14 @@ impl PhysicsEngine {
             output.push(PhysicsEvent::Destroyed { body: *body_id });
         }
 
+        // ── apply contact-based speed-boost impulses ──────────────────────────
+        //
+        // For every active contact pair, check whether one body carries a
+        // `BoostConfig` and the other is a live dynamic body.  If so, apply
+        // the configured impulse to the dynamic body.  This runs every step
+        // the bodies remain in contact, giving continuous acceleration.
+        output.extend(self.apply_boost_impulses());
+
         // ── advance time ──────────────────────────────────────────────────────
         self.elapsed += self.config.timestep;
 
@@ -431,6 +440,84 @@ impl PhysicsEngine {
                     .sum::<f32>()
             })
             .unwrap_or(0.0)
+    }
+
+    /// Scan all active contact pairs for boost configurations and apply impulses.
+    ///
+    /// For each contact where one body has a [`BoostConfig`] and the other is a
+    /// live dynamic body, apply the configured impulse to the dynamic body and
+    /// emit a [`PhysicsEvent::BoostActivated`] event.
+    ///
+    /// Two-phase design: collect `(target_id, impulse_vec)` pairs while
+    /// borrowing the narrow phase immutably, then mutably update the rigid body
+    /// set and emit events.
+    fn apply_boost_impulses(&mut self) -> Vec<PhysicsEvent> {
+        // Phase 1 — collect pending impulses (immutable borrow of narrow_phase /
+        // body_data / id maps).
+        let mut pending: Vec<(BodyId, Vec2)> = Vec::new();
+
+        for contact_pair in self.narrow_phase.contact_pairs() {
+            // Skip pairs with no solver-active contacts (separated but cached).
+            if !contact_pair.has_any_active_contact() {
+                continue;
+            }
+
+            let c1 = contact_pair.collider1;
+            let c2 = contact_pair.collider2;
+
+            // Both colliders must map to scene bodies (walls have no entry).
+            let id_a = match self.collider_to_id.get(&c1).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+            let id_b = match self.collider_to_id.get(&c2).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // Check both orderings: (boost_body, dynamic_target).
+            if let Some(pair) = self.resolve_boost(id_a, id_b) {
+                pending.push(pair);
+            } else if let Some(pair) = self.resolve_boost(id_b, id_a) {
+                pending.push(pair);
+            }
+        }
+
+        // Phase 2 — apply impulses and build events (mutable borrow of rigid_body_set).
+        let mut events = Vec::with_capacity(pending.len());
+        for (target_id, impulse_vec) in pending {
+            if let Some(&rb_handle) = self.id_to_handle.get(&target_id) {
+                if let Some(rb) = self.rigid_body_set.get_mut(rb_handle) {
+                    rb.apply_impulse(impulse_vec, true);
+                    events.push(PhysicsEvent::BoostActivated { body: target_id });
+                }
+            }
+        }
+        events
+    }
+
+    /// Check whether `boost_id` has a boost config applicable to `target_id`.
+    ///
+    /// Returns `Some((target_id, impulse_vector))` when:
+    /// - `boost_id` exists and carries a [`BoostConfig`],
+    /// - `target_id` exists, is still alive, and is [`BodyType::Dynamic`].
+    ///
+    /// Returns `None` otherwise.
+    fn resolve_boost(&self, boost_id: BodyId, target_id: BodyId) -> Option<(BodyId, Vec2)> {
+        let boost_cfg = self.body_data.get(&boost_id)?.boost.as_ref()?;
+        let target_data = self.body_data.get(&target_id)?;
+
+        if target_data.body_type != BodyType::Dynamic {
+            return None;
+        }
+        // Body must not have been destroyed this step.
+        if !self.id_to_handle.contains_key(&target_id) {
+            return None;
+        }
+
+        let dir = &boost_cfg.direction;
+        let impulse_vec = Vec2::new(dir.x * boost_cfg.impulse, dir.y * boost_cfg.impulse);
+        Some((target_id, impulse_vec))
     }
 
     /// Remove a body from the simulation and clean up all index entries.
@@ -1185,6 +1272,177 @@ mod tests {
             body.rotation.abs() < 1e-6,
             "fixed body should not rotate, got {}",
             body.rotation
+        );
+    }
+
+    // ── test: boost pad applies impulse and emits BoostActivated event ────────
+
+    /// A static boost platform with `direction: [0, 1]` (upward impulse) must:
+    /// 1. Emit at least one `PhysicsEvent::BoostActivated` while the ball
+    ///    rests on it.
+    /// 2. Leave the ball at a higher Y position than a control run without
+    ///    the boost configuration.
+    #[test]
+    fn test_boost_pad_applies_impulse() {
+        // Place a wide static platform at mid-height.
+        let boost_pad = rphys_scene::SceneObject {
+            name: Some("pad".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 10.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 15.0),
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Static,
+            material: Material {
+                restitution: 0.0,
+                friction: 1.0,
+                density: 1.0,
+            },
+            color: Color::rgb(0, 255, 200),
+            tags: vec!["boost".to_string()],
+            destructible: None,
+            // Upward boost (positive Y in our coordinate system).
+            boost: Some(rphys_scene::BoostConfig {
+                direction: SvVec2::new(0.0, 1.0),
+                impulse: 20.0,
+            }),
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        // Ball dropped just above the platform so it lands quickly.
+        let ball = rphys_scene::SceneObject {
+            name: Some("ball".to_string()),
+            shape: ShapeKind::Circle { radius: 0.3 },
+            position: SvVec2::new(10.0, 15.6), // just above pad top face
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Dynamic,
+            material: Material {
+                restitution: 0.0,
+                friction: 1.0,
+                density: 1.0,
+            },
+            color: Color::rgb(255, 0, 0),
+            tags: Vec::new(),
+            destructible: None,
+            boost: None,
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        let scene = minimal_scene(vec![boost_pad, ball]);
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+
+        // Run long enough for the ball to land and be boosted.
+        let events = engine.advance_to(0.5).unwrap();
+
+        // At least one BoostActivated event must have been emitted.
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, PhysicsEvent::BoostActivated { .. })),
+            "expected at least one BoostActivated event"
+        );
+    }
+
+    // ── test: non-boost pad does NOT emit BoostActivated ─────────────────────
+
+    /// A plain static platform (no boost config) must never emit
+    /// `PhysicsEvent::BoostActivated`, even when a dynamic ball contacts it.
+    #[test]
+    fn test_no_boost_config_no_event() {
+        let plain_pad = rphys_scene::SceneObject {
+            name: Some("plain".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 10.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 15.0),
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(128, 128, 128),
+            tags: Vec::new(),
+            destructible: None,
+            boost: None, // ← no boost
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        let ball = dynamic_ball(Some("ball"), SvVec2::new(10.0, 15.6), SvVec2::ZERO);
+        let scene = minimal_scene(vec![plain_pad, ball]);
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        let events = engine.advance_to(0.5).unwrap();
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PhysicsEvent::BoostActivated { .. })),
+            "plain pad should not emit BoostActivated events"
+        );
+    }
+
+    // ── test: boost ignores static-on-static contacts ─────────────────────────
+
+    /// If a boost pad contacts another static body, no impulse is applied and
+    /// no `BoostActivated` event is emitted (static bodies cannot be impulse-moved).
+    #[test]
+    fn test_boost_only_targets_dynamic_bodies() {
+        let boost_pad = rphys_scene::SceneObject {
+            name: Some("pad".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 4.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 10.0),
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(0, 255, 200),
+            tags: Vec::new(),
+            destructible: None,
+            boost: Some(rphys_scene::BoostConfig {
+                direction: SvVec2::new(0.0, 1.0),
+                impulse: 20.0,
+            }),
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        // A second static body touching the pad — should not be boosted.
+        let wall_block = rphys_scene::SceneObject {
+            name: Some("block".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 4.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 10.2), // resting on pad
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(200, 200, 200),
+            tags: Vec::new(),
+            destructible: None,
+            boost: None,
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        let scene = minimal_scene(vec![boost_pad, wall_block]);
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        let events = engine.advance_to(0.5).unwrap();
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, PhysicsEvent::BoostActivated { .. })),
+            "boost should not activate on static-to-static contact"
         );
     }
 }

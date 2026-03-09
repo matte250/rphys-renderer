@@ -626,7 +626,8 @@ fn collect_audio_event(
                 });
             }
         }
-        // Not an audio-relevant event.
+        // Not audio-relevant events.
+        PhysicsEvent::BoostActivated { .. } => {}
         PhysicsEvent::SimulationComplete { .. } => {}
     }
 }
