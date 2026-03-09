@@ -45,9 +45,9 @@ mod types;
 pub use parse::{parse_scene, parse_scene_file};
 pub use schema::scene_json_schema;
 pub use types::{
-    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment, Material,
-    ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2,
-    WallConfig, WorldBounds,
+    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment,
+    GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta,
+    SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
 };
 
 // Re-export error types at crate root.

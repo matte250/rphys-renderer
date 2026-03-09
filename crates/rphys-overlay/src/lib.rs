@@ -98,6 +98,7 @@ mod tests {
             racer_tag: "racer".to_string(),
             announcement_hold_secs: 2.0,
             checkpoints: vec![],
+            elimination_interval_secs: None,
         }
     }
 
@@ -159,6 +160,7 @@ mod tests {
                 y: 8.0,
                 label: Some("Halfway".to_string()),
             }],
+            elimination_interval_secs: None,
         };
         let ctx = default_ctx();
 

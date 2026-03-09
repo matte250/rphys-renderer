@@ -147,6 +147,27 @@ pub enum BodyType {
     Kinematic,
 }
 
+// ── Gravity well config ───────────────────────────────────────────────────────
+
+/// Configuration for a gravity-well attractor or repulsor zone.
+///
+/// When a dynamic body enters the `radius` of an object carrying a
+/// `GravityWellConfig`, the physics engine applies a continuous force that
+/// pulls the body toward the well center (attractor) or pushes it away
+/// (repulsor), scaling linearly with proximity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GravityWellConfig {
+    /// Influence radius in meters.  Dynamic bodies inside this radius are
+    /// affected by the well.  Must be > 0.
+    pub radius: f32,
+    /// Force magnitude in N applied per physics step (scales with proximity).
+    /// Must be > 0.
+    pub strength: f32,
+    /// `false` = attractor (pulls toward center), `true` = repulsor (pushes
+    /// away from center).
+    pub repulsor: bool,
+}
+
 // ── Boost config ──────────────────────────────────────────────────────────────
 
 /// Configuration for a speed-boost platform.
@@ -226,6 +247,11 @@ pub struct SceneObject {
     /// The physics engine will apply the configured impulse to any dynamic body
     /// that contacts this object.
     pub boost: Option<BoostConfig>,
+    /// If `Some`, this object acts as a gravity-well attractor or repulsor zone.
+    ///
+    /// Dynamic bodies that enter the well's `radius` will be continuously
+    /// attracted or repelled depending on `GravityWellConfig::repulsor`.
+    pub gravity_well: Option<GravityWellConfig>,
     /// Per-object sound overrides.
     pub audio: ObjectAudio,
 }
@@ -304,6 +330,10 @@ pub struct RaceConfig {
     ///
     /// Each checkpoint `y` must be greater than `finish_y`.
     pub checkpoints: Vec<Checkpoint>,
+    /// When set, the last-place racer is eliminated every this many seconds.
+    ///
+    /// Must be > 0 when present. `None` disables elimination mode (default).
+    pub elimination_interval_secs: Option<f32>,
 }
 
 impl Default for RaceConfig {
@@ -313,6 +343,7 @@ impl Default for RaceConfig {
             racer_tag: "racer".to_string(),
             announcement_hold_secs: 2.0,
             checkpoints: Vec::new(),
+            elimination_interval_secs: None,
         }
     }
 }

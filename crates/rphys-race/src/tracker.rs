@@ -468,6 +468,7 @@ mod tests {
             tags: vec!["racer".to_string()],
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: ObjectAudio::default(),
         }
     }
@@ -486,6 +487,7 @@ mod tests {
             tags: vec!["spectator".to_string()],
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: ObjectAudio::default(),
         }
     }
@@ -531,6 +533,7 @@ mod tests {
             racer_tag: "racer".to_string(),
             announcement_hold_secs: 2.0,
             checkpoints: Vec::new(),
+            elimination_interval_secs: None,
         }
     }
 
@@ -656,6 +659,7 @@ mod tests {
                 racer_tag: "racer".to_string(),
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
+                elimination_interval_secs: None,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -706,6 +710,7 @@ mod tests {
                 racer_tag: "racer".to_string(),
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
+                elimination_interval_secs: None,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -753,6 +758,7 @@ mod tests {
                     y: 20.0,
                     label: Some("Halfway".to_string()),
                 }],
+                elimination_interval_secs: None,
             },
             Some(EndCondition::TimeLimit { seconds: 15.0 }),
         );

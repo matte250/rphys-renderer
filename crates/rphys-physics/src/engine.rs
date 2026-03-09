@@ -838,6 +838,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         }
     }
@@ -1162,6 +1163,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         });
         assert!(PhysicsEngine::new(&scene, PhysicsConfig::default()).is_ok());
@@ -1192,6 +1194,7 @@ mod tests {
             tags: vec!["obstacle".to_string()],
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1249,6 +1252,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1309,6 +1313,7 @@ mod tests {
                 direction: SvVec2::new(0.0, 1.0),
                 impulse: 20.0,
             }),
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1330,6 +1335,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1370,6 +1376,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None, // ← no boost
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1411,6 +1418,7 @@ mod tests {
                 direction: SvVec2::new(0.0, 1.0),
                 impulse: 20.0,
             }),
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1431,6 +1439,7 @@ mod tests {
             tags: Vec::new(),
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 

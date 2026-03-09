@@ -12,9 +12,9 @@ use crate::de::{
     RawWallConfig,
 };
 use crate::types::{
-    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment, Material,
-    ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2,
-    WallConfig, WorldBounds,
+    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment,
+    GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta,
+    SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
 };
 
 // ── Error types ───────────────────────────────────────────────────────────────
@@ -477,6 +477,35 @@ fn convert_object(
         }
     };
 
+    let gravity_well = match &raw.gravity_well {
+        None => None,
+        Some(rg) => {
+            let mut gw_ok = true;
+            if rg.radius <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: display_name.clone(),
+                    message: format!("gravity_well.radius must be > 0, got {}", rg.radius),
+                });
+                gw_ok = false;
+            }
+            if rg.strength <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: display_name.clone(),
+                    message: format!("gravity_well.strength must be > 0, got {}", rg.strength),
+                });
+                gw_ok = false;
+            }
+            if !gw_ok {
+                return None;
+            }
+            Some(GravityWellConfig {
+                radius: rg.radius,
+                strength: rg.strength,
+                repulsor: rg.repulsor,
+            })
+        }
+    };
+
     let audio = convert_object_audio(raw.audio.as_ref(), base_dir, errors);
 
     Some(SceneObject {
@@ -492,6 +521,7 @@ fn convert_object(
         tags,
         destructible,
         boost,
+        gravity_well,
         audio,
     })
 }
@@ -825,6 +855,17 @@ fn convert_race_config(
         }
     }
 
+    let elimination_interval_secs = raw.elimination_interval_secs;
+    if let Some(interval) = elimination_interval_secs {
+        if interval <= 0.0 {
+            errors.push(ValidationError::InvalidValue {
+                name: "race.elimination_interval_secs".to_string(),
+                message: format!("race.elimination_interval_secs must be > 0, got {interval}"),
+            });
+            ok = false;
+        }
+    }
+
     if !ok {
         return None;
     }
@@ -834,6 +875,7 @@ fn convert_race_config(
         racer_tag,
         announcement_hold_secs,
         checkpoints,
+        elimination_interval_secs,
     })
 }
 
@@ -2564,6 +2606,220 @@ objects:
         assert!((boost.direction.x - 1.0).abs() < 1e-6);
         assert!((boost.direction.y - 0.0).abs() < 1e-6);
         assert!((boost.impulse - 12.5).abs() < 1e-6);
+    }
+
+    // ── Gravity well tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_gravity_well_attractor() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Gravity Well Attractor"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "well"
+    shape: circle
+    radius: 0.3
+    position: [7.5, 30.0]
+    body_type: static
+    color: "#ff00ff"
+    gravity_well:
+      radius: 4.0
+      strength: 12.0
+      repulsor: false
+    tags: ["well"]
+"##;
+        let scene = parse_scene(yaml).expect("should parse attractor");
+        let obj = &scene.objects[0];
+        let gw = obj
+            .gravity_well
+            .as_ref()
+            .expect("gravity_well should be Some");
+        assert!((gw.radius - 4.0).abs() < 1e-6);
+        assert!((gw.strength - 12.0).abs() < 1e-6);
+        assert!(!gw.repulsor);
+    }
+
+    #[test]
+    fn test_parse_gravity_well_repulsor() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Gravity Well Repulsor"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "repulsor"
+    shape: circle
+    radius: 0.3
+    position: [10.0, 15.0]
+    body_type: static
+    gravity_well:
+      radius: 3.0
+      strength: 8.0
+      repulsor: true
+"##;
+        let scene = parse_scene(yaml).expect("should parse repulsor");
+        let gw = scene.objects[0]
+            .gravity_well
+            .as_ref()
+            .expect("gravity_well should be Some");
+        assert!((gw.radius - 3.0).abs() < 1e-6);
+        assert!((gw.strength - 8.0).abs() < 1e-6);
+        assert!(gw.repulsor);
+    }
+
+    #[test]
+    fn test_gravity_well_repulsor_defaults_to_false() {
+        // When `repulsor` is omitted it should default to false (attractor).
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Gravity Well Default Repulsor"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "well"
+    shape: circle
+    radius: 0.3
+    position: [10.0, 20.0]
+    body_type: static
+    gravity_well:
+      radius: 5.0
+      strength: 10.0
+"##;
+        let scene = parse_scene(yaml).expect("should parse without repulsor field");
+        let gw = scene.objects[0]
+            .gravity_well
+            .as_ref()
+            .expect("gravity_well should be Some");
+        assert!(!gw.repulsor, "repulsor should default to false");
+    }
+
+    #[test]
+    fn test_gravity_well_absent_gives_none() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "No Gravity Well"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "plain"
+    shape: circle
+    radius: 0.5
+    position: [10.0, 10.0]
+"##;
+        let scene = parse_scene(yaml).expect("should parse without gravity_well");
+        assert!(scene.objects[0].gravity_well.is_none());
+    }
+
+    #[test]
+    fn test_gravity_well_radius_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Gravity Well Radius"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: circle
+    radius: 0.3
+    position: [10.0, 10.0]
+    gravity_well:
+      radius: -1.0
+      strength: 5.0
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("gravity_well.radius")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_gravity_well_strength_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Gravity Well Strength"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad"
+    shape: circle
+    radius: 0.3
+    position: [10.0, 10.0]
+    gravity_well:
+      radius: 4.0
+      strength: 0.0
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad" && message.contains("gravity_well.strength")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
     }
 
     #[test]

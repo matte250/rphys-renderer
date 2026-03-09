@@ -744,6 +744,7 @@ mod tests {
                 tags: vec![],
                 destructible: None,
                 boost: None,
+                gravity_well: None,
                 audio: ObjectAudio::default(),
             }],
             end_condition: Some(rphys_scene::EndCondition::TimeLimit { seconds: 1.0 }),
@@ -948,6 +949,7 @@ mod tests {
             tags: vec!["racer".to_string()],
             destructible: None,
             boost: None,
+            gravity_well: None,
             audio: ObjectAudio::default(),
         };
 
@@ -991,6 +993,7 @@ mod tests {
                 racer_tag: "racer".to_string(),
                 announcement_hold_secs: 0.0, // no hold to keep test fast
                 checkpoints: vec![],
+                elimination_interval_secs: None,
             }),
         }
     }

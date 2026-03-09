@@ -142,6 +142,55 @@ static SCENE_SCHEMA: &str = r##"{
           "description": "Global volume multiplier."
         }
       }
+    },
+
+    "race": {
+      "type": "object",
+      "description": "Optional race-mode configuration. Presence enables race tracking and overlay.",
+      "required": ["finish_y"],
+      "additionalProperties": false,
+      "properties": {
+        "finish_y": {
+          "type": "number",
+          "minimum": 0,
+          "description": "World Y coordinate of the finish line. Race ends when any racer's Y ≤ this value."
+        },
+        "racer_tag": {
+          "type": "string",
+          "default": "racer",
+          "description": "Tag that identifies racer bodies."
+        },
+        "announcement_hold_secs": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2.0,
+          "description": "How long (in seconds) to hold the winner frame at the end of export."
+        },
+        "elimination_interval_secs": {
+          "type": ["number", "null"],
+          "exclusiveMinimum": 0,
+          "description": "When set, the last-place racer is eliminated every this many seconds. Omit or null to disable."
+        },
+        "checkpoints": {
+          "type": "array",
+          "description": "Optional milestone Y-coordinates shown as horizontal lines with labels.",
+          "items": {
+            "type": "object",
+            "required": ["y"],
+            "additionalProperties": false,
+            "properties": {
+              "y": {
+                "type": "number",
+                "description": "Y coordinate of the checkpoint line. Must be > finish_y."
+              },
+              "label": {
+                "type": "string",
+                "description": "Display label shown on the checkpoint line."
+              }
+            }
+          }
+        }
+      }
     }
 
   },
@@ -217,6 +266,30 @@ static SCENE_SCHEMA: &str = r##"{
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Impulse magnitude in N·s applied per contact frame."
+        }
+      }
+    },
+
+    "GravityWellConfig": {
+      "type": "object",
+      "description": "Gravity-well attractor/repulsor zone. Dynamic bodies within `radius` meters are continuously pulled toward (attractor) or pushed away from (repulsor) the well center.",
+      "required": ["radius", "strength"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Influence radius in meters. Bodies inside this distance are affected."
+        },
+        "strength": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Force magnitude in N applied per physics step (scales linearly with proximity)."
+        },
+        "repulsor": {
+          "type": "boolean",
+          "default": false,
+          "description": "false = attractor (pulls toward center), true = repulsor (pushes away)."
         }
       }
     },
@@ -297,6 +370,7 @@ static SCENE_SCHEMA: &str = r##"{
         },
         "destructible": { "$ref": "#/definitions/Destructible" },
         "boost": { "$ref": "#/definitions/BoostConfig" },
+        "gravity_well": { "$ref": "#/definitions/GravityWellConfig" },
         "audio": { "$ref": "#/definitions/ObjectAudio" }
       }
     },

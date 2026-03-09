@@ -49,7 +49,7 @@ impl Default for TrailConfig {
     fn default() -> Self {
         Self {
             length: 12,
-            max_alpha: 0.35,
+            max_alpha: 0.55,
             radius_factor: 0.75,
             tags_filter: vec!["racer".to_string()],
         }
@@ -131,39 +131,43 @@ impl TrailRenderer {
     /// 4. Composite the current frame **over** the trail layer using standard
     ///    premultiplied-alpha blending.
     pub fn render(&self, state: &PhysicsState, ctx: &RenderContext) -> Frame {
-        // Guard: tiny-skia can't create zero-dimension pixmaps.
-        let Some(mut trail_pixmap) = Pixmap::new(ctx.width, ctx.height) else {
-            return Frame::new(ctx.width, ctx.height);
-        };
-
-        // 1. Fill background.
-        trail_pixmap.fill(to_skia_color(ctx.background_color, 1.0));
-
-        // 2. Draw ghost circles, oldest → newest.
-        let history_len = self.history.len();
-        for (i, snapshot) in self.history.iter().enumerate() {
-            // i = 0 → oldest (lowest alpha), i = len-1 → newest (highest alpha).
-            // Use (i+1)/len so every snapshot gets a non-zero alpha, ensuring
-            // even a single history frame produces a visible ghost.
-            let alpha = self.config.max_alpha * (i + 1) as f32 / history_len as f32;
-
-            for &(pos, world_radius, color) in snapshot.values() {
-                let (cx, cy) = world_to_pixel(pos, ctx);
-                let ghost_radius_px = world_radius * self.config.radius_factor * ctx.scale;
-                draw_ghost_circle(&mut trail_pixmap, cx, cy, ghost_radius_px, color, alpha);
-            }
-        }
-
-        // 3. Render current physics state.
+        // 1. Render the current physics state (opaque background + bodies).
         let current_frame = self.inner.render(state, ctx);
 
-        // 4. Composite current frame over trail layer (premultiplied "over").
-        composite_over_pixmap(&mut trail_pixmap, &current_frame);
+        // Guard: tiny-skia can't create zero-dimension pixmaps.
+        let Some(mut pixmap) = Pixmap::new(ctx.width, ctx.height) else {
+            return current_frame;
+        };
+
+        // 2. Copy current frame into pixmap.
+        //    Both use premultiplied RGBA with stride = width × 4 (no padding).
+        {
+            let dst = pixmap.data_mut();
+            let src = &current_frame.pixels;
+            let copy_len = dst.len().min(src.len());
+            dst[..copy_len].copy_from_slice(&src[..copy_len]);
+        }
+
+        // 3. Draw ghost circles ON TOP (oldest → newest, increasing alpha).
+        //    Ghosts are rendered over the full frame so they're always visible.
+        //    The most-recent ghost overlaps the ball but is semi-transparent,
+        //    giving a natural "comet tail" look.
+        let history_len = self.history.len();
+        if history_len > 0 {
+            for (i, snapshot) in self.history.iter().enumerate() {
+                let alpha = self.config.max_alpha * (i + 1) as f32 / history_len as f32;
+                for &(pos, world_radius, color) in snapshot.values() {
+                    let (cx, cy) = world_to_pixel(pos, ctx);
+                    let ghost_radius_px = world_radius * self.config.radius_factor * ctx.scale;
+                    draw_ghost_circle(&mut pixmap, cx, cy, ghost_radius_px, color, alpha);
+                }
+            }
+        }
 
         Frame {
             width: ctx.width,
             height: ctx.height,
-            pixels: trail_pixmap.data().to_vec(),
+            pixels: pixmap.data().to_vec(),
         }
     }
 }
@@ -226,58 +230,6 @@ fn draw_ghost_circle(pixmap: &mut Pixmap, cx: f32, cy: f32, radius: f32, color: 
     );
 }
 
-/// Composite a [`Frame`] **over** a [`Pixmap`] in-place using standard
-/// premultiplied-alpha "over" blending.
-///
-/// `src` is the current physics frame (foreground).
-/// `dst` is the trail-layer pixmap (background).
-///
-/// Both are in premultiplied RGBA format (as produced by tiny-skia).
-fn composite_over_pixmap(dst: &mut Pixmap, src: &Frame) {
-    let dst_data = dst.data_mut();
-    let src_data = &src.pixels;
-
-    // Stride in bytes (4 channels per pixel).
-    let pixel_count = (src.width * src.height) as usize;
-
-    for px in 0..pixel_count {
-        let i = px * 4;
-
-        // Source premultiplied channels.
-        let sr = src_data[i] as u32;
-        let sg = src_data[i + 1] as u32;
-        let sb = src_data[i + 2] as u32;
-        let sa = src_data[i + 3] as u32;
-
-        if sa == 255 {
-            // Fully opaque source: just overwrite destination.
-            dst_data[i] = sr as u8;
-            dst_data[i + 1] = sg as u8;
-            dst_data[i + 2] = sb as u8;
-            dst_data[i + 3] = 255;
-            continue;
-        }
-
-        if sa == 0 {
-            // Fully transparent source: destination unchanged.
-            continue;
-        }
-
-        // Premultiplied "over": out = src + dst * (1 - src_alpha)
-        let inv = 255 - sa;
-        let dr = dst_data[i] as u32;
-        let dg = dst_data[i + 1] as u32;
-        let db = dst_data[i + 2] as u32;
-        let da = dst_data[i + 3] as u32;
-
-        // Using integer rounding: (val * inv + 127) / 255
-        dst_data[i] = (sr + (dr * inv + 127) / 255).min(255) as u8;
-        dst_data[i + 1] = (sg + (dg * inv + 127) / 255).min(255) as u8;
-        dst_data[i + 2] = (sb + (db * inv + 127) / 255).min(255) as u8;
-        dst_data[i + 3] = (sa + (da * inv + 127) / 255).min(255) as u8;
-    }
-}
-
 /// Convert a world-space position to pixel-space `(x, y)` using the render context.
 ///
 /// Applies camera offset, scale, and Y-axis flip (physics is Y-up; screen is Y-down).
@@ -285,18 +237,6 @@ fn world_to_pixel(world: Vec2, ctx: &RenderContext) -> (f32, f32) {
     let px = (world.x - ctx.camera_origin.x) * ctx.scale;
     let py = ctx.height as f32 - (world.y - ctx.camera_origin.y) * ctx.scale;
     (px, py)
-}
-
-/// Convert an [`rphys_scene::Color`] to a `tiny_skia::Color` with an alpha multiplier.
-fn to_skia_color(c: Color, alpha_factor: f32) -> tiny_skia::Color {
-    let a = (c.a as f32 / 255.0) * alpha_factor;
-    tiny_skia::Color::from_rgba(
-        c.r as f32 / 255.0,
-        c.g as f32 / 255.0,
-        c.b as f32 / 255.0,
-        a,
-    )
-    .unwrap_or(tiny_skia::Color::BLACK)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

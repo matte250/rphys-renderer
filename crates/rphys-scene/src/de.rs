@@ -98,6 +98,7 @@ pub(crate) struct RawObject {
     pub tags: Option<Vec<String>>,
     pub destructible: Option<RawDestructible>,
     pub boost: Option<RawBoostConfig>,
+    pub gravity_well: Option<RawGravityWellConfig>,
     pub audio: Option<RawObjectAudio>,
 }
 
@@ -124,6 +125,18 @@ pub(crate) struct RawBoostConfig {
     pub impulse: f32,
 }
 
+/// Raw gravity-well configuration — mirrors the `gravity_well:` YAML block.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawGravityWellConfig {
+    /// Influence radius in meters.
+    pub radius: f32,
+    /// Force magnitude in N per physics step (scales with proximity).
+    pub strength: f32,
+    /// `false` = attractor, `true` = repulsor.
+    #[serde(default)]
+    pub repulsor: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawObjectAudio {
     pub bounce: Option<String>,
@@ -145,6 +158,7 @@ pub(crate) struct RawRaceConfig {
     pub finish_y: f32,
     pub racer_tag: Option<String>,
     pub announcement_hold_secs: Option<f32>,
+    pub elimination_interval_secs: Option<f32>,
     #[serde(default)]
     pub checkpoints: Vec<RawCheckpoint>,
 }
