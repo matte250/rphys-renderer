@@ -21,13 +21,13 @@ pub enum ParticleKind {
 /// A single particle that moves under constant velocity and fades out over
 /// its lifetime.
 ///
-/// Coordinates are **pixel-space** (top-left origin, Y-down), not world-space.
-/// The VFX engine never needs to project particles back to world coordinates.
+/// Coordinates are **world-space** (meters, Y-up). The VFX engine converts
+/// to pixel space at render time using the current [`rphys_renderer::RenderContext`].
 #[derive(Debug, Clone)]
 pub struct KinematicParticle {
-    /// Current pixel-space position (top-left origin, Y-down).
+    /// Current world-space position (meters, Y-up).
     pub pos: Vec2,
-    /// Pixel-space velocity (pixels per physics second).
+    /// World-space velocity (meters per second, Y-up).
     pub vel: Vec2,
     /// Remaining lifetime in seconds.  When `<= 0` the particle is dead.
     pub lifetime_rem: f32,
@@ -78,9 +78,11 @@ impl KinematicParticle {
 pub struct ActiveFlash {
     /// The body this flash is attached to.
     pub body_id: BodyId,
-    /// Current pixel-space center of the body (updated each frame via
-    /// [`VfxEngine::begin_frame`]).
-    pub center_px: Vec2,
+    /// Current world-space centre of the body (meters, Y-up).
+    ///
+    /// Renamed from `center_px`; updated each frame from
+    /// [`VfxEngine::begin_frame`].
+    pub center_world: Vec2,
     /// Glow color (constant for the flash's lifetime).
     pub color: Color,
     /// Total glow radius = body screen-radius + `radius_ext_px`.

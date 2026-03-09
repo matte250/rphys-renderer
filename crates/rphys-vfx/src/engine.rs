@@ -3,8 +3,8 @@
 //! # Usage pattern (one rendered frame)
 //!
 //! ```rust,ignore
-//! // 1. Snapshot current body positions.
-//! vfx.begin_frame(&body_snapshot, finish_line_px);
+//! // 1. Snapshot current body positions (world coords) + pass camera scale.
+//! vfx.begin_frame(&body_snapshot, finish_line_world, ctx.scale);
 //!
 //! // 2. Feed physics + race events (spawns particles / flashes).
 //! vfx.feed_events(&physics_events, &race_events, &lookup);
@@ -12,8 +12,8 @@
 //! // 3. Advance particle lifetimes.
 //! vfx.update(dt);
 //!
-//! // 4. Composite all VFX into the rendered frame.
-//! vfx.render_into(&mut frame);
+//! // 4. Composite all VFX into the rendered frame (camera transform applied here).
+//! vfx.render_into(&mut frame, &ctx);
 //! ```
 
 use std::collections::{HashMap, HashSet};
@@ -21,7 +21,7 @@ use std::f32::consts::PI;
 
 use rphys_physics::types::{BodyId, PhysicsEvent};
 use rphys_race::{RaceEvent, WinnerInfo};
-use rphys_renderer::Frame;
+use rphys_renderer::{Frame, RenderContext};
 use rphys_scene::{Color, Vec2, VfxConfig};
 
 use crate::blend::{draw_dot, draw_glow};
@@ -52,16 +52,16 @@ struct PendingSparks {
 /// A pending boost-flash upsert collected during event processing.
 struct PendingFlash {
     body: BodyId,
-    center_px: Vec2,
-    body_radius_px: f32,
+    center_world: Vec2,
+    body_radius_world: f32,
 }
 
 // ── VfxEngine ─────────────────────────────────────────────────────────────────
 
 /// VFX engine: manages particles and boost flashes for a single race export.
 ///
-/// All coordinates stored internally are **pixel-space** (top-left origin,
-/// Y-down), computed once per frame when the render context is available.
+/// All positions stored internally are **world-space** (meters, Y-up).
+/// The camera transform is applied only at [`render_into`] time.
 pub struct VfxEngine {
     // ── Configuration ─────────────────────────────────────────────────────
     config: VfxConfig,
@@ -75,7 +75,7 @@ pub struct VfxEngine {
     flashes: HashMap<BodyId, ActiveFlash>,
 
     // ── Per-frame helpers ──────────────────────────────────────────────────
-    /// Last known pixel position + color + radius for each tracked body.
+    /// Last known world-space position, color, and world-radius for each body.
     ///
     /// Updated at the start of every frame by [`begin_frame`].
     last_known_positions: HashMap<BodyId, (Vec2, Color, f32)>,
@@ -90,9 +90,14 @@ pub struct VfxEngine {
     /// `true` after the winner-pop burst has been emitted.
     winner_pop_fired: bool,
 
-    // ── Finish-line pixel position ─────────────────────────────────────────
-    /// Pixel-space position of the finish line (updated each frame).
-    finish_line_px: Option<Vec2>,
+    // ── Finish-line world position ─────────────────────────────────────────
+    /// World-space position of the finish line (updated each frame).
+    finish_line_world: Option<Vec2>,
+
+    /// Pixels-per-meter scale from the most recent frame.
+    ///
+    /// Used to convert config speed (px/s) → world units/s at emit time.
+    current_scale: f32,
 
     // ── RNG ───────────────────────────────────────────────────────────────
     rng: LcgRng,
@@ -111,7 +116,8 @@ impl VfxEngine {
             last_known_positions: HashMap::new(),
             frame_collision_dedup: HashSet::new(),
             winner_pop_fired: false,
-            finish_line_px: None,
+            finish_line_world: None,
+            current_scale: 1.0,
             rng: LcgRng::new(seed),
         }
     }
@@ -125,21 +131,26 @@ impl VfxEngine {
     ///
     /// # Parameters
     ///
-    /// - `body_snapshot` — slice of `(BodyId, pixel_pos, color, radius_px)`
-    ///   for every **alive** body this frame.
-    /// - `finish_line_px` — pixel-space position of the finish line.
+    /// - `body_snapshot` — slice of `(BodyId, world_pos, color, world_radius_meters)`
+    ///   for every **alive** body this frame.  Positions are in meters, Y-up.
+    /// - `finish_line_world` — world-space position of the finish line (meters).
+    /// - `scale` — pixels per meter from the current [`RenderContext`].
+    ///   Stored as `current_scale` for speed conversion in emit calls.
     pub fn begin_frame(
         &mut self,
         body_snapshot: &[(BodyId, Vec2, Color, f32)],
-        finish_line_px: Vec2,
+        finish_line_world: Vec2,
+        scale: f32,
     ) {
+        self.current_scale = scale;
+
         // Refresh position cache.
         self.last_known_positions.clear();
         for &(id, pos, color, radius) in body_snapshot {
             self.last_known_positions.insert(id, (pos, color, radius));
         }
 
-        // Update boost-flash centres.
+        // Update boost-flash centres to latest world positions.
         let updates: Vec<(BodyId, Vec2)> = self
             .flashes
             .keys()
@@ -151,11 +162,11 @@ impl VfxEngine {
             .collect();
         for (id, pos) in updates {
             if let Some(flash) = self.flashes.get_mut(&id) {
-                flash.center_px = pos;
+                flash.center_world = pos;
             }
         }
 
-        self.finish_line_px = Some(finish_line_px);
+        self.finish_line_world = Some(finish_line_world);
         self.frame_collision_dedup.clear();
     }
 
@@ -227,8 +238,8 @@ impl VfxEngine {
                     if let Some(&(pos, _, radius)) = self.last_known_positions.get(body) {
                         pending_flashes.push(PendingFlash {
                             body: *body,
-                            center_px: pos,
-                            body_radius_px: radius,
+                            center_world: pos,
+                            body_radius_world: radius,
                         });
                     }
                 }
@@ -275,11 +286,11 @@ impl VfxEngine {
             self.emit_sparks(ps.pos, ps.color, &ps.params);
         }
         for pf in pending_flashes {
-            self.upsert_boost_flash(pf.body, pf.center_px, pf.body_radius_px);
+            self.upsert_boost_flash(pf.body, pf.center_world, pf.body_radius_world);
         }
         if let Some(winner) = winner_event {
             self.winner_pop_fired = true;
-            let pop_pos = self.finish_line_px.unwrap_or_else(|| {
+            let pop_pos = self.finish_line_world.unwrap_or_else(|| {
                 self.last_known_positions
                     .get(&winner.body_id)
                     .map(|&(p, _, _)| p)
@@ -303,20 +314,24 @@ impl VfxEngine {
     }
 
     /// Composite all active VFX into `frame`.
-    pub fn render_into(&self, frame: &mut Frame) {
+    ///
+    /// `ctx` provides the current camera transform used to project world-space
+    /// particle and flash positions into pixel space before drawing.
+    pub fn render_into(&self, frame: &mut Frame, ctx: &RenderContext) {
         let w = frame.width;
         let h = frame.height;
         let pixels = &mut frame.pixels;
 
         // Boost flashes drawn first (behind particles).
         for flash in self.flashes.values() {
+            let (cx, cy) = world_to_pixel(flash.center_world, ctx);
             let alpha = flash.alpha_factor() * 0.85;
             draw_glow(
                 pixels,
                 w,
                 h,
-                flash.center_px.x,
-                flash.center_px.y,
+                cx,
+                cy,
                 flash.radius_ext_px,
                 flash.color,
                 alpha,
@@ -329,7 +344,8 @@ impl VfxEngine {
             if alpha <= 0.001 {
                 continue;
             }
-            draw_dot(pixels, w, h, p.pos.x, p.pos.y, p.size_px, p.color, alpha);
+            let (px, py) = world_to_pixel(p.pos, ctx);
+            draw_dot(pixels, w, h, px, py, p.size_px, p.color, alpha);
         }
     }
 
@@ -347,6 +363,20 @@ impl VfxEngine {
 
     // ── Internal helpers ───────────────────────────────────────────────────────
 
+    /// Convert a config speed value (px/s) to world units/s using the cached scale.
+    ///
+    /// Config `speed` fields retain their legacy px/s semantic so that existing
+    /// YAML scene files continue to work without changes.  This conversion
+    /// happens once per emit call.
+    #[inline]
+    fn px_speed_to_world(&self, speed_px_per_s: f32) -> f32 {
+        if self.current_scale > 0.0 {
+            speed_px_per_s / self.current_scale
+        } else {
+            speed_px_per_s // fallback: no conversion if scale is zero
+        }
+    }
+
     fn emit_sparks(&mut self, pos: Vec2, default_color: Color, params: &SparkParams) {
         let available = self
             .config
@@ -360,7 +390,9 @@ impl VfxEngine {
             } else {
                 self.rng.next_range(params.angle_min, params.angle_max)
             };
-            let speed = self.rng.next_range(params.speed * 0.5, params.speed * 1.5);
+            let speed_px = self.rng.next_range(params.speed * 0.5, params.speed * 1.5);
+            // Config speed is in px/s; convert to world units/s (m/s) for storage.
+            let world_speed = self.px_speed_to_world(speed_px);
 
             let color = match &params.colors {
                 Some(palette) if !palette.is_empty() => palette[i % palette.len()],
@@ -369,7 +401,8 @@ impl VfxEngine {
 
             self.particles.push(KinematicParticle {
                 pos,
-                vel: Vec2::new(angle.cos() * speed, angle.sin() * speed),
+                // World-space Y-up: positive sin = upward — no negation needed.
+                vel: Vec2::new(angle.cos() * world_speed, angle.sin() * world_speed),
                 lifetime_rem: params.lifetime_secs,
                 lifetime_total: params.lifetime_secs,
                 size_px: params.size_px,
@@ -379,13 +412,15 @@ impl VfxEngine {
         }
     }
 
-    fn upsert_boost_flash(&mut self, body: BodyId, center_px: Vec2, body_radius_px: f32) {
+    fn upsert_boost_flash(&mut self, body: BodyId, center_world: Vec2, body_radius_world: f32) {
         let cfg = &self.config.boost_flash;
+        // Convert world-space radius to pixel-space for the glow halo size.
+        let radius_ext_px = body_radius_world * self.current_scale + cfg.radius_px;
         let flash = ActiveFlash {
             body_id: body,
-            center_px,
+            center_world,
             color: cfg.color,
-            radius_ext_px: body_radius_px + cfg.radius_px,
+            radius_ext_px,
             time_rem: cfg.duration_secs,
             duration: cfg.duration_secs,
         };
@@ -417,13 +452,15 @@ impl VfxEngine {
 
         for i in 0..count {
             let angle = self.rng.next_range(angle_min, angle_max);
-            let speed = self.rng.next_range(cfg.speed * 0.5, cfg.speed * 1.5);
+            let speed_px = self.rng.next_range(cfg.speed * 0.5, cfg.speed * 1.5);
+            // Config speed is in px/s; convert to world units/s (m/s).
+            let world_speed = self.px_speed_to_world(speed_px);
             let color = palette[i % palette.len()];
 
-            // In pixel-space, "up" = negative Y.
+            // World-space is Y-up: positive sin at angle_center=PI/2 → (0, +Y) = upward. ✓
             self.particles.push(KinematicParticle {
                 pos,
-                vel: Vec2::new(angle.cos() * speed, -angle.sin() * speed),
+                vel: Vec2::new(angle.cos() * world_speed, angle.sin() * world_speed),
                 lifetime_rem: cfg.lifetime_secs,
                 lifetime_total: cfg.lifetime_secs,
                 size_px: cfg.size_px,
@@ -434,6 +471,24 @@ impl VfxEngine {
     }
 }
 
+// ── Private free functions ────────────────────────────────────────────────────
+
+/// Convert a world-space position to pixel-space using the camera context.
+///
+/// Equivalent to the private helper in `rphys-renderer`.  Duplicated here to
+/// avoid adding a public export from that crate for a three-line utility.
+///
+/// Formula:
+/// - `px = (world.x − camera_origin.x) × scale`
+/// - `py = height − (world.y − camera_origin.y) × scale`  (Y-axis flip: world
+///   is Y-up, pixels are Y-down from top-left)
+#[inline]
+fn world_to_pixel(world: Vec2, ctx: &RenderContext) -> (f32, f32) {
+    let px = (world.x - ctx.camera_origin.x) * ctx.scale;
+    let py = ctx.height as f32 - (world.y - ctx.camera_origin.y) * ctx.scale;
+    (px, py)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -441,10 +496,22 @@ mod tests {
     use super::*;
     use rphys_physics::types::{BodyId, CollisionInfo, PhysicsEvent};
     use rphys_race::RaceEvent;
+    use rphys_renderer::RenderContext;
     use rphys_scene::{
         BoostFlashConfig, Color, EliminationBurstConfig, ImpactSparksConfig, Vec2, VfxConfig,
         WinnerPopConfig,
     };
+
+    /// A test [`RenderContext`] with scale=50 (50 px/m), 1080×1920 frame.
+    fn test_ctx() -> RenderContext {
+        RenderContext {
+            width: 1080,
+            height: 1920,
+            camera_origin: Vec2::ZERO,
+            scale: 50.0,
+            background_color: Color::BLACK,
+        }
+    }
 
     fn enabled_impact_config() -> VfxConfig {
         VfxConfig {
@@ -495,8 +562,8 @@ mod tests {
     #[test]
     fn test_engine_emits_sparks_on_collision() {
         let mut engine = VfxEngine::new(enabled_impact_config());
-        let snap = vec![body_snap(0, 100.0, 200.0), body_snap(1, 110.0, 200.0)];
-        engine.begin_frame(&snap, Vec2::new(540.0, 1800.0));
+        let snap = vec![body_snap(0, 2.0, 4.0), body_snap(1, 2.2, 4.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 36.0), 50.0);
         let events = vec![make_collision(0, 1)];
         engine.feed_events(&events, &[], &noop_lookup);
         assert_eq!(
@@ -509,8 +576,8 @@ mod tests {
     #[test]
     fn test_engine_sparks_cleared_after_lifetime() {
         let mut engine = VfxEngine::new(enabled_impact_config());
-        let snap = vec![body_snap(0, 50.0, 50.0), body_snap(1, 60.0, 50.0)];
-        engine.begin_frame(&snap, Vec2::new(540.0, 900.0));
+        let snap = vec![body_snap(0, 1.0, 1.0), body_snap(1, 1.2, 1.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 18.0), 50.0);
         engine.feed_events(&[make_collision(0, 1)], &[], &noop_lookup);
         assert!(engine.particle_count() > 0);
         engine.update(1.0); // 1.0 s >> 0.5 s lifetime
@@ -520,8 +587,8 @@ mod tests {
     #[test]
     fn test_engine_collision_dedup_per_frame() {
         let mut engine = VfxEngine::new(enabled_impact_config());
-        let snap = vec![body_snap(0, 50.0, 50.0), body_snap(1, 60.0, 50.0)];
-        engine.begin_frame(&snap, Vec2::new(540.0, 900.0));
+        let snap = vec![body_snap(0, 1.0, 1.0), body_snap(1, 1.2, 1.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 18.0), 50.0);
         let events = vec![make_collision(0, 1), make_collision(0, 1)];
         engine.feed_events(&events, &[], &noop_lookup);
         assert_eq!(
@@ -535,8 +602,8 @@ mod tests {
     fn test_winner_pop_fires_once_only() {
         use rphys_race::WinnerInfo;
         let mut engine = VfxEngine::new(enabled_winner_pop_config());
-        let snap = vec![body_snap(0, 540.0, 900.0)];
-        engine.begin_frame(&snap, Vec2::new(540.0, 900.0));
+        let snap = vec![body_snap(0, 5.0, 10.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 18.0), 50.0);
 
         let winner = WinnerInfo {
             body_id: BodyId(0),
@@ -554,7 +621,7 @@ mod tests {
         let count_after_first = engine.particle_count();
 
         // Second emission attempt must be ignored.
-        engine.begin_frame(&snap, Vec2::new(540.0, 900.0));
+        engine.begin_frame(&snap, Vec2::new(10.8, 18.0), 50.0);
         engine.feed_events(&[], &[RaceEvent::RaceComplete { winner }], &noop_lookup);
         assert_eq!(
             engine.particle_count(),
@@ -575,8 +642,8 @@ mod tests {
             ..VfxConfig::default()
         };
         let mut engine = VfxEngine::new(cfg);
-        let snap = vec![body_snap(3, 100.0, 200.0)];
-        engine.begin_frame(&snap, Vec2::new(0.0, 0.0));
+        let snap = vec![body_snap(3, 2.0, 4.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 0.0), 50.0);
         let events = vec![PhysicsEvent::BoostActivated { body: BodyId(3) }];
         engine.feed_events(&events, &[], &noop_lookup);
         assert_eq!(engine.flash_count(), 1, "boost flash should be created");
@@ -594,8 +661,8 @@ mod tests {
             ..VfxConfig::default()
         };
         let mut engine = VfxEngine::new(cfg);
-        let snap = vec![body_snap(5, 50.0, 50.0)];
-        engine.begin_frame(&snap, Vec2::new(0.0, 0.0));
+        let snap = vec![body_snap(5, 1.0, 1.0)];
+        engine.begin_frame(&snap, Vec2::new(0.0, 0.0), 50.0);
         engine.feed_events(
             &[PhysicsEvent::BoostActivated { body: BodyId(5) }],
             &[],
@@ -619,8 +686,8 @@ mod tests {
             ..VfxConfig::default()
         };
         let mut engine = VfxEngine::new(cfg);
-        let snap = vec![body_snap(7, 200.0, 300.0)];
-        engine.begin_frame(&snap, Vec2::new(0.0, 0.0));
+        let snap = vec![body_snap(7, 4.0, 6.0)];
+        engine.begin_frame(&snap, Vec2::new(0.0, 0.0), 50.0);
         engine.feed_events(
             &[],
             &[RaceEvent::RacerEliminated {
@@ -648,8 +715,8 @@ mod tests {
             ..VfxConfig::default()
         };
         let mut engine = VfxEngine::new(cfg);
-        let snap = vec![body_snap(0, 50.0, 50.0), body_snap(1, 60.0, 50.0)];
-        engine.begin_frame(&snap, Vec2::new(0.0, 0.0));
+        let snap = vec![body_snap(0, 1.0, 1.0), body_snap(1, 1.2, 1.0)];
+        engine.begin_frame(&snap, Vec2::new(0.0, 0.0), 50.0);
         engine.feed_events(&[make_collision(0, 1)], &[], &noop_lookup);
         assert!(
             engine.particle_count() <= 5,
@@ -671,13 +738,72 @@ mod tests {
             ..VfxConfig::default()
         };
         let mut engine = VfxEngine::new(cfg);
-        let snap = vec![body_snap(0, 50.0, 50.0), body_snap(1, 60.0, 50.0)];
-        engine.begin_frame(&snap, Vec2::new(540.0, 960.0));
+        let snap = vec![body_snap(0, 1.0, 1.0), body_snap(1, 1.2, 1.0)];
+        engine.begin_frame(&snap, Vec2::new(10.8, 19.2), 50.0);
         engine.feed_events(&[make_collision(0, 1)], &[], &noop_lookup);
         engine.update(0.01);
 
         let mut frame = Frame::new(64, 64);
-        engine.render_into(&mut frame);
+        engine.render_into(&mut frame, &test_ctx());
+    }
+
+    /// Verify that winner pop particles are anchored in world space:
+    /// rendering with two cameras that differ only in `camera_origin` should
+    /// produce pixel positions that shift by exactly
+    /// `Δcamera_origin * scale` pixels.
+    #[test]
+    fn test_winner_pop_stays_world_anchored() {
+        use rphys_race::WinnerInfo;
+
+        let mut engine = VfxEngine::new(enabled_winner_pop_config());
+
+        // Emit at world position (5.0, 10.0) with scale=50.
+        let world_finish = Vec2::new(5.0, 10.0);
+        engine.begin_frame(&[], world_finish, 50.0);
+
+        let winner = WinnerInfo {
+            body_id: BodyId(0),
+            display_name: "Test".to_string(),
+            color: Color::rgb(255, 0, 0),
+            finish_time_secs: 1.0,
+        };
+        engine.feed_events(&[], &[RaceEvent::RaceComplete { winner }], &noop_lookup);
+        assert!(engine.particle_count() > 0, "particles should be emitted");
+
+        // Camera A: origin=(0,0), scale=50, 1080×1920.
+        let ctx_a = RenderContext {
+            width: 1080,
+            height: 1920,
+            camera_origin: Vec2::ZERO,
+            scale: 50.0,
+            background_color: Color::BLACK,
+        };
+        // Camera B: origin=(0,5), scale=50 — camera panned down 5 m in world.
+        // A particle at world.y=10 should render 5*50=250 px lower in frame_b.
+        let ctx_b = RenderContext {
+            width: 1080,
+            height: 1920,
+            camera_origin: Vec2::new(0.0, 5.0),
+            scale: 50.0,
+            background_color: Color::BLACK,
+        };
+
+        // Directly compute pixel positions for the first particle under each camera.
+        let first = &engine.particles[0];
+        let (_, py_a) = world_to_pixel(first.pos, &ctx_a);
+        let (_, py_b) = world_to_pixel(first.pos, &ctx_b);
+
+        // Camera B has camera_origin.y=5 (camera panned down 5 m in world).
+        // Formula: py = height - (world.y - camera_origin.y) * scale
+        //   py_a = 1920 - (world.y - 0) * 50
+        //   py_b = 1920 - (world.y - 5) * 50 = py_a + 250
+        // So py_b > py_a by 250: the particle appears 250 px lower in camera B,
+        // which is correct — the camera moved down, so world objects scroll down.
+        let diff = py_b - py_a;
+        assert!(
+            (diff - 250.0).abs() < 1e-3,
+            "pixel Y should shift by 5m×50px/m=250px when camera pans 5m down; got diff={diff:.3}"
+        );
     }
 
     #[test]

@@ -245,14 +245,18 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
         let state = engine.state();
         let mut frame = renderer.render(&state, &ctx);
 
-        // VFX: build body snapshot, feed events, tick, composite.
+        // VFX: build body snapshot (world coords), feed events, tick, composite.
         if let Some(ref mut vfx_sys) = vfx {
-            let body_snap = build_body_snapshot(&state, &ctx);
-            let finish_line_px = Vec2::new(ctx.width as f32 * 0.5, ctx.height as f32);
-            vfx_sys.begin_frame(&body_snap, finish_line_px);
+            let body_snap = build_body_snapshot(&state);
+            // Standard (non-race) export has no finish line; use world center.
+            let finish_line_world = Vec2::new(
+                scene.environment.world_bounds.width * 0.5,
+                scene.environment.world_bounds.height * 0.5,
+            );
+            vfx_sys.begin_frame(&body_snap, finish_line_world, ctx.scale);
             vfx_sys.feed_events(&events, &[], &|_| None);
             vfx_sys.update(frame_dt);
-            vfx_sys.render_into(&mut frame);
+            vfx_sys.render_into(&mut frame, &ctx);
         }
 
         // Write raw RGBA to ffmpeg stdin.
@@ -467,18 +471,14 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             race_complete,
         );
 
-        // VFX: build body snapshot, feed all events, tick.
+        // VFX: build body snapshot (world coords), feed all events, tick.
         if let Some(ref mut vfx) = vfx_engine {
-            let finish_y = race_config.finish_y;
-            let finish_line_px = {
-                let (px, py) = world_to_pixel_ctx(
-                    Vec2::new(scene.environment.world_bounds.width * 0.5, finish_y),
-                    &ctx,
-                );
-                Vec2::new(px, py)
-            };
-            let body_snap = build_body_snapshot(&phys_state, &ctx);
-            vfx.begin_frame(&body_snap, finish_line_px);
+            let finish_line_world = Vec2::new(
+                scene.environment.world_bounds.width * 0.5,
+                race_config.finish_y,
+            );
+            let body_snap = build_body_snapshot(&phys_state);
+            vfx.begin_frame(&body_snap, finish_line_world, ctx.scale);
             vfx.feed_events(&physics_events, &race_events, &|_| None);
             vfx.update(dt);
         }
@@ -486,9 +486,9 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         trail_renderer.push_frame(&phys_state, dt);
         let mut frame = trail_renderer.render(&phys_state, &ctx);
 
-        // Composite VFX on top of the rendered frame.
+        // Composite VFX on top of the rendered frame (camera transform applied inside).
         if let Some(ref vfx) = vfx_engine {
-            vfx.render_into(&mut frame);
+            vfx.render_into(&mut frame, &ctx);
         }
 
         // Draw race overlay (finish/checkpoint lines + rank panel).
@@ -732,39 +732,30 @@ fn remux_with_audio(
     Ok(())
 }
 
-/// Convert a world-space `Vec2` to pixel-space `(x, y)` using a [`RenderContext`].
-fn world_to_pixel_ctx(world: Vec2, ctx: &RenderContext) -> (f32, f32) {
-    let px = (world.x - ctx.camera_origin.x) * ctx.scale;
-    let py = ctx.height as f32 - (world.y - ctx.camera_origin.y) * ctx.scale;
-    (px, py)
-}
-
 /// Build the per-body snapshot slice that [`VfxEngine::begin_frame`] expects:
-/// `(BodyId, pixel_pos, color, radius_px)` for each alive body.
+/// `(BodyId, world_pos, color, world_radius_meters)` for each alive body.
+///
+/// Positions and radii are in world-space (meters, Y-up).  The VFX engine
+/// applies the camera transform at render time.
 fn build_body_snapshot(
     state: &rphys_physics::PhysicsState,
-    ctx: &RenderContext,
 ) -> Vec<(rphys_physics::types::BodyId, Vec2, Color, f32)> {
     state
         .bodies
         .iter()
         .filter(|b| b.is_alive)
         .map(|b| {
-            let (px, py) = world_to_pixel_ctx(b.position, ctx);
-            let radius_px = match &b.shape {
-                rphys_scene::ShapeKind::Circle { radius } => radius * ctx.scale,
+            let world_radius = match &b.shape {
+                rphys_scene::ShapeKind::Circle { radius } => *radius,
                 rphys_scene::ShapeKind::Rectangle { width, height } => {
-                    (width.powi(2) + height.powi(2)).sqrt() * 0.5 * ctx.scale
+                    (width.powi(2) + height.powi(2)).sqrt() * 0.5
                 }
-                rphys_scene::ShapeKind::Polygon { vertices } => {
-                    vertices
-                        .iter()
-                        .map(|v| (v.x * v.x + v.y * v.y).sqrt())
-                        .fold(0.0_f32, f32::max)
-                        * ctx.scale
-                }
+                rphys_scene::ShapeKind::Polygon { vertices } => vertices
+                    .iter()
+                    .map(|v| (v.x * v.x + v.y * v.y).sqrt())
+                    .fold(0.0_f32, f32::max),
             };
-            (b.id, Vec2::new(px, py), b.color, radius_px)
+            (b.id, b.position, b.color, world_radius)
         })
         .collect()
 }
