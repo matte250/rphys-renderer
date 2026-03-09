@@ -207,4 +207,5 @@ pub(crate) struct RawCameraConfig {
     pub finish_zoom: Option<bool>,
     pub finish_zoom_factor: Option<f32>,
     pub finish_zoom_lerp: Option<f32>,
+    pub lock_horizontal: Option<bool>,
 }

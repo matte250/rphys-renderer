@@ -377,7 +377,11 @@ impl FollowCamera {
 
         // 2. Exponentially smooth camera position toward target.
         let lerp = self.config.follow_lerp;
-        self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+        if !self.config.lock_horizontal {
+            self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+        }
+        // When lock_horizontal is true, current_pos.x stays at world_center.x
+        // (set at construction) so both side walls are always on screen.
         self.current_pos.y += (target.y - self.current_pos.y) * lerp;
 
         // 3. Camera shake.

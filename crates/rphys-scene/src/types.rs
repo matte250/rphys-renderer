@@ -524,6 +524,14 @@ pub struct CameraConfig {
 
     /// Per-frame smoothing factor for the finish zoom transition. Default: `0.04`.
     pub finish_zoom_lerp: f32,
+
+    /// Lock the horizontal camera position to the world centre.
+    ///
+    /// When `true` (default), the camera only tracks the leader's Y position
+    /// and stays centred horizontally — both side walls remain visible at all
+    /// times.  Set to `false` to allow full 2-D panning.
+    /// Default: `true`.
+    pub lock_horizontal: bool,
 }
 
 impl Default for CameraConfig {
@@ -539,6 +547,7 @@ impl Default for CameraConfig {
             finish_zoom: true,
             finish_zoom_factor: 1.5,
             finish_zoom_lerp: 0.04,
+            lock_horizontal: true,
         }
     }
 }

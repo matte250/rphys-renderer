@@ -920,6 +920,7 @@ fn convert_camera_config(
         finish_zoom: raw.finish_zoom.unwrap_or(true),
         finish_zoom_factor: raw.finish_zoom_factor.unwrap_or(1.5),
         finish_zoom_lerp: raw.finish_zoom_lerp.unwrap_or(0.04),
+        lock_horizontal: raw.lock_horizontal.unwrap_or(true),
     })
 }
 

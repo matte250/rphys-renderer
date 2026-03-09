@@ -208,6 +208,11 @@ static SCENE_SCHEMA: &str = r##"{
           "maximum": 1.0,
           "default": 0.04,
           "description": "Per-frame smoothing factor for the finish zoom transition."
+        },
+        "lock_horizontal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Lock horizontal position to world centre so both side walls remain visible. Set false to allow full 2-D panning."
         }
       }
     },
