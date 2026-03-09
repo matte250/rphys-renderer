@@ -248,7 +248,7 @@ static SCENE_SCHEMA: &str = r##"{
           "type": "number",
           "minimum": 0.0,
           "default": 0.0,
-          "description": "Seconds to continue simulating after the first racer crosses the finish line so that subsequent racers can also finish and be ranked. 0 (default) stops immediately on the first finish."
+          "description": "Simulation seconds to continue running after the first racer crosses the finish line so that subsequent racers can also finish and be ranked. Because the export loop applies a 4× slow-motion effect near the finish line (SLOWDOWN_FACTOR = 0.25), the resulting video plays for approximately post_finish_secs × 4 wall-clock seconds. For example, post_finish_secs: 8.0 produces roughly 32 video-seconds of post-finish footage. 0 (default) stops immediately on the first finish."
         },
         "checkpoints": {
           "type": "array",

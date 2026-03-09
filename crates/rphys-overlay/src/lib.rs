@@ -99,6 +99,7 @@ mod tests {
             announcement_hold_secs: 2.0,
             checkpoints: vec![],
             elimination_interval_secs: None,
+            post_finish_secs: 0.0,
         }
     }
 
@@ -161,6 +162,7 @@ mod tests {
                 label: Some("Halfway".to_string()),
             }],
             elimination_interval_secs: None,
+            post_finish_secs: 0.0,
         };
         let ctx = default_ctx();
 

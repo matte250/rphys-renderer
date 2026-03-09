@@ -334,11 +334,16 @@ pub struct RaceConfig {
     ///
     /// Must be > 0 when present. `None` disables elimination mode (default).
     pub elimination_interval_secs: Option<f32>,
-    /// Seconds to keep simulating after the first racer crosses the finish line,
-    /// so that additional racers can also finish and be ranked.
+    /// Seconds of **simulation time** to keep running after the first racer crosses
+    /// the finish line, so that additional racers can also finish and be ranked.
     ///
-    /// `0.0` means stop immediately when the winner is decided (default,
-    /// preserves existing behaviour). Must be >= 0.
+    /// **Important:** Because the export loop applies a 4× slow-motion effect near
+    /// the finish line (`SLOWDOWN_FACTOR = 0.25`), the resulting video will play
+    /// for approximately `post_finish_secs × 4` wall-clock seconds. For example,
+    /// `post_finish_secs: 8.0` produces roughly 32 video-seconds of post-finish footage.
+    ///
+    /// `0.0` (default) stops immediately when the winner is decided,
+    /// preserving existing behaviour. Must be >= 0.
     pub post_finish_secs: f32,
 }
 

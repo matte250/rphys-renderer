@@ -840,6 +840,7 @@ mod tests {
             look_ahead: 0.0,  // no look-ahead offset so we can predict exactly
             shake_on_impact: false,
             finish_zoom: false,
+            lock_horizontal: false, // allow x to move so we can verify snap on both axes
             ..CameraConfig::default()
         };
         let ctx = base_ctx();
