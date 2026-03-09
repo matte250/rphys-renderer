@@ -26,6 +26,7 @@ use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::RaceTracker;
 use rphys_renderer::{
     CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, TinySkiaRenderer,
+    TrailConfig, TrailRenderer,
 };
 use rphys_scene::{Scene, Vec2};
 use tempfile::NamedTempFile;
@@ -282,7 +283,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         ..PhysicsConfig::default()
     };
     let mut tracker = RaceTracker::new(scene, physics_cfg)?;
-    let renderer = TinySkiaRenderer;
+    let mut trail_renderer = TrailRenderer::new(TrailConfig::default());
     let mut audio = OfflineAudioMixer::new(44100, 2);
 
     // ── Build camera ───────────────────────────────────────────────────────
@@ -355,10 +356,11 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             collect_audio_event(&mut audio, tracker.engine(), event, tracker.time(), scene);
         }
 
-        // Render frame with race camera.
+        // Render frame with race camera (with trail ghosts).
         let phys_state = tracker.physics_state();
         let ctx = camera.update(&phys_state, frame_dt);
-        let mut frame = renderer.render(&phys_state, &ctx);
+        trail_renderer.push_frame(&phys_state);
+        let mut frame = trail_renderer.render(&phys_state, &ctx);
 
         // Draw race overlay (finish/checkpoint lines + rank panel).
         overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &ctx)?;
@@ -389,7 +391,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         let phys_state = tracker.physics_state();
         // Camera stays at its last position; update with dt=0.0 to freeze it.
         let last_ctx = camera.update(&phys_state, 0.0);
-        let mut frame = renderer.render(&phys_state, &last_ctx);
+        let mut frame = trail_renderer.render(&phys_state, &last_ctx);
 
         overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &last_ctx)?;
         overlay.draw_winner_announcement(&mut frame, tracker.race_state())?;
