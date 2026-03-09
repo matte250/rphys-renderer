@@ -1,0 +1,12 @@
+[package]
+name = "rphys-vfx"
+version = "0.1.0"
+edition = "2021"
+description = "Particle-based visual effects for rphys-renderer race scenes"
+
+[dependencies]
+thiserror      = { workspace = true }
+rphys-scene    = { workspace = true }
+rphys-physics  = { workspace = true }
+rphys-race     = { workspace = true }
+rphys-renderer = { path = "../rphys-renderer" }

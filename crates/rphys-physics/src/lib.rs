@@ -23,6 +23,7 @@
 //! #         audio: SceneAudio::default(),
 //! #         race: None,
 //! #         camera: None,
+//! #         vfx: None,
 //! #     }
 //! # }
 //!

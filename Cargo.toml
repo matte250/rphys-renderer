@@ -10,6 +10,7 @@ members = [
     "crates/rphys-cli",
     "crates/rphys-race",
     "crates/rphys-overlay",
+    "crates/rphys-vfx",
 ]
 
 # ── Shared dependency versions ────────────────────────────────────────────────
@@ -52,6 +53,7 @@ rphys-scene   = { path = "crates/rphys-scene" }
 rphys-physics = { path = "crates/rphys-physics" }
 rphys-race    = { path = "crates/rphys-race" }
 rphys-overlay = { path = "crates/rphys-overlay" }
+rphys-vfx     = { path = "crates/rphys-vfx" }
 
 # Text rendering
 fontdue = "0.9"

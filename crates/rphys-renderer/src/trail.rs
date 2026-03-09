@@ -7,10 +7,10 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! let mut trail = TrailRenderer::new(TrailConfig::default());
+//! let mut trail = TrailRenderer::new(TrailConfig::default(), None);
 //!
-//! // Each frame, call push_frame BEFORE render:
-//! trail.push_frame(&phys_state);
+//! // Each frame, call push_frame BEFORE render (dt = seconds since last frame):
+//! trail.push_frame(&phys_state, dt);
 //! let frame = trail.render(&phys_state, &ctx);
 //! ```
 
@@ -20,6 +20,7 @@ use rphys_physics::types::{BodyId, PhysicsState};
 use rphys_scene::{Color, ShapeKind, Vec2};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
+use crate::vfx::VfxSystem;
 use crate::{Frame, RenderContext, Renderer, TinySkiaRenderer};
 
 // ── TrailConfig ───────────────────────────────────────────────────────────────
@@ -72,23 +73,35 @@ pub struct TrailRenderer {
     history: VecDeque<HashMap<BodyId, (Vec2, f32, Color)>>,
     /// Underlying full-fidelity renderer for the current frame.
     inner: TinySkiaRenderer,
+    /// Optional VFX system — `None` on legacy scenes without a `vfx:` block.
+    vfx: Option<VfxSystem>,
 }
 
 impl TrailRenderer {
     /// Create a new [`TrailRenderer`] with the given configuration.
-    pub fn new(config: TrailConfig) -> Self {
+    ///
+    /// Pass `Some(vfx)` to enable particle effects; `None` disables all VFX
+    /// (zero overhead on legacy scenes with no `vfx:` YAML block).
+    pub fn new(config: TrailConfig, vfx: Option<VfxSystem>) -> Self {
         Self {
             config,
             history: VecDeque::new(),
             inner: TinySkiaRenderer,
+            vfx,
         }
     }
 
-    /// Snapshot the current physics state into the history ring-buffer.
+    /// Return a mutable reference to the [`VfxSystem`], if present.
+    pub fn vfx_mut(&mut self) -> Option<&mut VfxSystem> {
+        self.vfx.as_mut()
+    }
+
+    /// Snapshot the current physics state into the history ring-buffer and
+    /// advance the VFX particle lifetimes by `dt` seconds.
     ///
     /// Call this **once per frame, before** [`render`](TrailRenderer::render).
     /// Bodies that fail the tag filter are excluded from the snapshot.
-    pub fn push_frame(&mut self, state: &PhysicsState) {
+    pub fn push_frame(&mut self, state: &PhysicsState, dt: f32) {
         let mut snapshot: HashMap<BodyId, (Vec2, f32, Color)> = HashMap::new();
 
         for body in &state.bodies {
@@ -116,6 +129,11 @@ impl TrailRenderer {
         // Evict oldest frame when the buffer exceeds `length`.
         while self.history.len() > self.config.length {
             self.history.pop_front();
+        }
+
+        // Advance VFX particle and flash lifetimes.
+        if let Some(vfx) = &mut self.vfx {
+            vfx.update(dt);
         }
     }
 
@@ -162,6 +180,11 @@ impl TrailRenderer {
                     draw_ghost_circle(&mut pixmap, cx, cy, ghost_radius_px, color, alpha);
                 }
             }
+        }
+
+        // 4. Composite VFX (boost flashes + particles) on top.
+        if let Some(vfx) = &self.vfx {
+            vfx.render_into(&mut pixmap, ctx);
         }
 
         Frame {
@@ -301,12 +324,12 @@ mod tests {
             radius_factor: 0.75,
             tags_filter: vec![],
         };
-        let mut trail = TrailRenderer::new(config);
+        let mut trail = TrailRenderer::new(config, None);
 
         let body = make_body_at(0, Vec2::new(5.0, 5.0), vec![]);
         let state = state_with_bodies(vec![body]);
 
-        trail.push_frame(&state);
+        trail.push_frame(&state, 0.016);
         let frame = trail.render(&state, &default_ctx());
 
         assert_eq!(frame.width, 200, "frame width must match ctx");
@@ -335,13 +358,13 @@ mod tests {
             radius_factor: 0.75,
             tags_filter: vec![],
         };
-        let mut trail = TrailRenderer::new(config);
+        let mut trail = TrailRenderer::new(config, None);
 
         let state = state_with_bodies(vec![make_body_at(0, Vec2::new(5.0, 5.0), vec![])]);
 
         // Push 3× more frames than the configured length.
         for _ in 0..(max_len * 3) {
-            trail.push_frame(&state);
+            trail.push_frame(&state, 0.016);
         }
 
         assert!(
@@ -367,7 +390,7 @@ mod tests {
             radius_factor: 1.0, // full radius for easier detection
             tags_filter: vec![],
         };
-        let mut trail = TrailRenderer::new(config);
+        let mut trail = TrailRenderer::new(config, None);
 
         let ctx = RenderContext {
             width: 400,
@@ -381,7 +404,7 @@ mod tests {
         // pixel_y = 400 - (5.0 - 0.0) * 20.0 = 400 - 100 = 300
         let body_at_origin = make_body_at(0, Vec2::new(5.0, 5.0), vec![]);
         let state_a = state_with_bodies(vec![body_at_origin]);
-        trail.push_frame(&state_a);
+        trail.push_frame(&state_a, 0.016);
 
         // Current state: ball moved to world (5, 18) → pixel (100, 40).
         // pixel_y = 400 - (18.0 - 0.0) * 20.0 = 400 - 360 = 40
@@ -418,13 +441,13 @@ mod tests {
             radius_factor: 0.75,
             tags_filter: vec!["racer".to_string()],
         };
-        let mut trail = TrailRenderer::new(config);
+        let mut trail = TrailRenderer::new(config, None);
 
         // Body without the "racer" tag.
         let untagged = make_body_at(0, Vec2::new(5.0, 5.0), vec!["obstacle".to_string()]);
         let state = state_with_bodies(vec![untagged]);
 
-        trail.push_frame(&state);
+        trail.push_frame(&state, 0.016);
 
         // History should have one snapshot entry, but it should be empty
         // (body didn't match the tag filter).
@@ -445,12 +468,12 @@ mod tests {
             radius_factor: 0.75,
             tags_filter: vec![], // no filter
         };
-        let mut trail = TrailRenderer::new(config);
+        let mut trail = TrailRenderer::new(config, None);
 
         let body = make_body_at(0, Vec2::new(3.0, 3.0), vec![]);
         let state = state_with_bodies(vec![body]);
 
-        trail.push_frame(&state);
+        trail.push_frame(&state, 0.016);
 
         assert_eq!(
             trail.history[0].len(),

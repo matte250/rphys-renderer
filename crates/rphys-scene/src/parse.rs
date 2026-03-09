@@ -9,12 +9,13 @@ use std::path::{Path, PathBuf};
 
 use crate::de::{
     RawCameraConfig, RawEndCondition, RawEnvironment, RawObject, RawRaceConfig, RawScene,
-    RawSceneAudio, RawWallConfig,
+    RawSceneAudio, RawVfxConfig, RawWallConfig,
 };
 use crate::types::{
-    BodyType, BoostConfig, CameraConfig, CameraMode, Checkpoint, Color, Destructible, EndCondition,
-    Environment, GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio,
-    SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
+    BodyType, BoostConfig, BoostFlashConfig, CameraConfig, CameraMode, Checkpoint, Color,
+    Destructible, EliminationBurstConfig, EndCondition, Environment, GravityWellConfig,
+    ImpactSparksConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta,
+    SceneObject, ShapeKind, Vec2, VfxConfig, WallConfig, WinnerPopConfig, WorldBounds,
 };
 
 // ── Error types ───────────────────────────────────────────────────────────────
@@ -205,6 +206,12 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         .as_ref()
         .and_then(|cc| convert_camera_config(cc, &mut errors));
 
+    // Convert VFX config (optional).
+    let vfx = raw
+        .vfx
+        .as_ref()
+        .and_then(|vc| convert_vfx_config(vc, &mut errors));
+
     if !errors.is_empty() {
         return Err(ParseError::Validation(errors));
     }
@@ -232,6 +239,7 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         audio,
         race,
         camera,
+        vfx,
     })
 }
 
@@ -981,6 +989,127 @@ fn resolve_path(p: &str, base_dir: Option<&Path>) -> PathBuf {
         Some(dir) => dir.join(&path),
         None => path,
     }
+}
+
+/// Convert a [`RawVfxConfig`] into a validated [`VfxConfig`], recording errors.
+///
+/// Each sub-effect defaults all its fields when the YAML block for that effect
+/// is absent (`enabled` defaults to `false`).  Returns `None` only when a
+/// validation error is recorded.
+fn convert_vfx_config(raw: &RawVfxConfig, errors: &mut Vec<ValidationError>) -> Option<VfxConfig> {
+    let max_particles = raw.max_particles.unwrap_or(500);
+
+    // ── impact_sparks ─────────────────────────────────────────────────────
+    let impact_sparks = match &raw.impact_sparks {
+        None => ImpactSparksConfig::default(),
+        Some(r) => ImpactSparksConfig {
+            enabled: r.enabled.unwrap_or(false),
+            count: r.count.unwrap_or(12),
+            lifetime_secs: r.lifetime_secs.unwrap_or(0.25),
+            size_px: r.size_px.unwrap_or(2.0),
+            speed: r.speed.unwrap_or(200.0),
+        },
+    };
+
+    // ── boost_flash ───────────────────────────────────────────────────────
+    let boost_flash_color = raw
+        .boost_flash
+        .as_ref()
+        .and_then(|r| r.color.as_ref())
+        .and_then(|hex| match parse_hex_color(hex) {
+            Ok(c) => Some(c),
+            Err(msg) => {
+                errors.push(ValidationError::InvalidValue {
+                    name: "vfx.boost_flash.color".to_string(),
+                    message: msg,
+                });
+                None
+            }
+        })
+        .unwrap_or(Color::WHITE);
+
+    let boost_flash = match &raw.boost_flash {
+        None => BoostFlashConfig::default(),
+        Some(r) => BoostFlashConfig {
+            enabled: r.enabled.unwrap_or(false),
+            color: boost_flash_color,
+            radius_px: r.radius_px.unwrap_or(8.0),
+            duration_secs: r.duration_secs.unwrap_or(0.3),
+        },
+    };
+
+    // ── elimination_burst ─────────────────────────────────────────────────
+    let elimination_burst = match &raw.elimination_burst {
+        None => EliminationBurstConfig::default(),
+        Some(r) => EliminationBurstConfig {
+            enabled: r.enabled.unwrap_or(false),
+            count: r.count.unwrap_or(30),
+            lifetime_secs: r.lifetime_secs.unwrap_or(0.6),
+            size_px: r.size_px.unwrap_or(3.0),
+            speed: r.speed.unwrap_or(300.0),
+        },
+    };
+
+    // ── winner_pop ────────────────────────────────────────────────────────
+    let winner_pop_colors: Vec<Color> = raw
+        .winner_pop
+        .as_ref()
+        .and_then(|r| r.colors.as_ref())
+        .map(|hexes| {
+            hexes
+                .iter()
+                .filter_map(|hex| match parse_hex_color(hex) {
+                    Ok(c) => Some(c),
+                    Err(msg) => {
+                        errors.push(ValidationError::InvalidValue {
+                            name: "vfx.winner_pop.colors".to_string(),
+                            message: msg,
+                        });
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let winner_pop = match &raw.winner_pop {
+        None => WinnerPopConfig::default(),
+        Some(r) => WinnerPopConfig {
+            enabled: r.enabled.unwrap_or(false),
+            count: r.count.unwrap_or(60),
+            lifetime_secs: r.lifetime_secs.unwrap_or(1.2),
+            size_px: r.size_px.unwrap_or(4.0),
+            speed: r.speed.unwrap_or(350.0),
+            spread_deg: r.spread_deg.unwrap_or(180.0),
+            colors: winner_pop_colors,
+        },
+    };
+
+    let cfg = VfxConfig {
+        max_particles,
+        impact_sparks,
+        boost_flash,
+        elimination_burst,
+        winner_pop,
+    };
+
+    // Run cross-field validation.
+    if let Err(e) = crate::types::validate_vfx_config(&cfg) {
+        errors.push(ValidationError::InvalidValue {
+            name: "vfx".to_string(),
+            message: e.to_string(),
+        });
+        return None;
+    }
+
+    // If any color errors were recorded (from boost_flash or winner_pop), bail.
+    if errors.iter().any(
+        |e| matches!(e, ValidationError::InvalidValue { name, .. } if name.starts_with("vfx.")),
+    ) {
+        return None;
+    }
+
+    Some(cfg)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -2601,6 +2730,209 @@ end_condition:
         } else {
             panic!("expected Validation error, got {err:?}");
         }
+    }
+
+    // ── VFX config tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_vfx_absent_gives_none() {
+        let scene = parse_scene(minimal_yaml()).expect("should parse");
+        assert!(scene.vfx.is_none(), "no vfx: block → None");
+    }
+
+    #[test]
+    fn test_vfx_empty_block_uses_defaults() {
+        let yaml = minimal_yaml_with("vfx: {}\n");
+        let scene = parse_scene(&yaml).expect("should parse empty vfx block");
+        let vfx = scene.vfx.expect("vfx should be Some");
+        assert_eq!(vfx.max_particles, 500);
+        assert!(!vfx.impact_sparks.enabled);
+        assert!(!vfx.boost_flash.enabled);
+        assert!(!vfx.elimination_burst.enabled);
+        assert!(!vfx.winner_pop.enabled);
+    }
+
+    #[test]
+    fn test_vfx_impact_sparks_parsed() {
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  impact_sparks:
+    enabled: true
+    count: 8
+    lifetime_secs: 0.3
+    size_px: 1.5
+    speed: 150.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse impact_sparks");
+        let sparks = &scene.vfx.as_ref().unwrap().impact_sparks;
+        assert!(sparks.enabled);
+        assert_eq!(sparks.count, 8);
+        assert!((sparks.lifetime_secs - 0.3).abs() < 1e-6);
+        assert!((sparks.size_px - 1.5).abs() < 1e-6);
+        assert!((sparks.speed - 150.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vfx_boost_flash_parsed() {
+        let yaml = minimal_yaml_with(
+            r##"vfx:
+  boost_flash:
+    enabled: true
+    color: "#ffcc00"
+    radius_px: 12.0
+    duration_secs: 0.5
+"##,
+        );
+        let scene = parse_scene(&yaml).expect("should parse boost_flash");
+        let flash = &scene.vfx.as_ref().unwrap().boost_flash;
+        assert!(flash.enabled);
+        assert_eq!(flash.color.r, 0xff);
+        assert_eq!(flash.color.g, 0xcc);
+        assert_eq!(flash.color.b, 0x00);
+        assert!((flash.radius_px - 12.0).abs() < 1e-6);
+        assert!((flash.duration_secs - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vfx_elimination_burst_parsed() {
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  elimination_burst:
+    enabled: true
+    count: 20
+    lifetime_secs: 0.8
+    size_px: 4.0
+    speed: 250.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse elimination_burst");
+        let burst = &scene.vfx.as_ref().unwrap().elimination_burst;
+        assert!(burst.enabled);
+        assert_eq!(burst.count, 20);
+        assert!((burst.speed - 250.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_vfx_winner_pop_parsed() {
+        let yaml = minimal_yaml_with(
+            r##"vfx:
+  winner_pop:
+    enabled: true
+    count: 40
+    lifetime_secs: 1.5
+    size_px: 5.0
+    speed: 400.0
+    spread_deg: 120.0
+    colors:
+      - "#ff0000"
+      - "#00ff00"
+      - "#0000ff"
+"##,
+        );
+        let scene = parse_scene(&yaml).expect("should parse winner_pop");
+        let pop = &scene.vfx.as_ref().unwrap().winner_pop;
+        assert!(pop.enabled);
+        assert_eq!(pop.count, 40);
+        assert!((pop.spread_deg - 120.0).abs() < 1e-6);
+        assert_eq!(pop.colors.len(), 3);
+        assert_eq!(pop.colors[0].r, 0xff);
+        assert_eq!(pop.colors[1].g, 0xff);
+        assert_eq!(pop.colors[2].b, 0xff);
+    }
+
+    #[test]
+    fn test_vfx_max_particles_parsed() {
+        let yaml = minimal_yaml_with("vfx:\n  max_particles: 200\n");
+        let scene = parse_scene(&yaml).expect("should parse max_particles");
+        assert_eq!(scene.vfx.as_ref().unwrap().max_particles, 200);
+    }
+
+    #[test]
+    fn test_vfx_negative_count_rejected() {
+        // count 0 → validation error (must be >= 1)
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  impact_sparks:
+    enabled: true
+    count: 0
+    lifetime_secs: 0.25
+    size_px: 2.0
+    speed: 200.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(
+                errs.iter().any(|e| matches!(
+                    e,
+                    ValidationError::InvalidValue { name, .. } if name == "vfx"
+                )),
+                "expected vfx validation error; got: {errs:?}",
+            );
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_vfx_negative_lifetime_rejected() {
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  impact_sparks:
+    enabled: true
+    count: 5
+    lifetime_secs: -0.1
+    size_px: 2.0
+    speed: 100.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        assert!(
+            matches!(err, ParseError::Validation(_)),
+            "expected Validation error"
+        );
+    }
+
+    #[test]
+    fn test_vfx_invalid_color_rejected() {
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  boost_flash:
+    enabled: true
+    color: "notacolor"
+    radius_px: 8.0
+    duration_secs: 0.3
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        assert!(
+            matches!(err, ParseError::Validation(_)),
+            "expected Validation error for bad color"
+        );
+    }
+
+    #[test]
+    fn test_vfx_all_four_effects_enabled() {
+        let yaml = minimal_yaml_with(
+            r#"vfx:
+  max_particles: 500
+  impact_sparks:
+    enabled: true
+  boost_flash:
+    enabled: true
+  elimination_burst:
+    enabled: true
+  winner_pop:
+    enabled: true
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("all four effects");
+        let vfx = scene.vfx.expect("vfx present");
+        assert!(vfx.impact_sparks.enabled);
+        assert!(vfx.boost_flash.enabled);
+        assert!(vfx.elimination_burst.enabled);
+        assert!(vfx.winner_pop.enabled);
     }
 
     // ── Boost config tests ────────────────────────────────────────────────────

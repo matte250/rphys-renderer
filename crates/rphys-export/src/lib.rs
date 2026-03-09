@@ -29,6 +29,7 @@ use rphys_renderer::{
     StaticCamera, TinySkiaRenderer, TrailConfig, TrailRenderer,
 };
 use rphys_scene::{CameraConfig, CameraMode, Color, Scene, Vec2};
+use rphys_vfx::VfxEngine;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -215,6 +216,9 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
     let renderer = TinySkiaRenderer;
     let mut audio = OfflineAudioMixer::new(44100, 2);
 
+    // ── VFX system (optional) ──────────────────────────────────────────────
+    let mut vfx: Option<VfxEngine> = scene.vfx.clone().map(VfxEngine::new);
+
     // ── Spawn ffmpeg ───────────────────────────────────────────────────────
     // Audio will be added in a second pass after we know the duration.
     let mut ffmpeg = spawn_ffmpeg_video_only(&options)?;
@@ -226,6 +230,7 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
     // ── Main render loop ───────────────────────────────────────────────────
     let _export_start = Instant::now();
     let mut frame_count = 0u64;
+    let frame_dt = 1.0_f32 / options.fps as f32;
 
     loop {
         let target_time = (frame_count + 1) as f32 / options.fps as f32;
@@ -238,7 +243,17 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
 
         // Render.
         let state = engine.state();
-        let frame = renderer.render(&state, &ctx);
+        let mut frame = renderer.render(&state, &ctx);
+
+        // VFX: build body snapshot, feed events, tick, composite.
+        if let Some(ref mut vfx_sys) = vfx {
+            let body_snap = build_body_snapshot(&state, &ctx);
+            let finish_line_px = Vec2::new(ctx.width as f32 * 0.5, ctx.height as f32);
+            vfx_sys.begin_frame(&body_snap, finish_line_px);
+            vfx_sys.feed_events(&events, &[], &|_| None);
+            vfx_sys.update(frame_dt);
+            vfx_sys.render_into(&mut frame);
+        }
 
         // Write raw RGBA to ffmpeg stdin.
         ffmpeg_stdin
@@ -319,7 +334,10 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         ..PhysicsConfig::default()
     };
     let mut tracker = RaceTracker::new(scene, physics_cfg)?;
-    let mut trail_renderer = TrailRenderer::new(TrailConfig::default());
+
+    // Construct the VFX engine when the scene has a `vfx:` block.
+    let mut vfx_engine: Option<VfxEngine> = scene.vfx.clone().map(VfxEngine::new);
+    let mut trail_renderer = TrailRenderer::new(TrailConfig::default(), None);
     let mut audio = OfflineAudioMixer::new(44100, 2);
 
     // ── Build camera ───────────────────────────────────────────────────────
@@ -448,8 +466,30 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             leader_pos,
             race_complete,
         );
-        trail_renderer.push_frame(&phys_state);
+
+        // VFX: build body snapshot, feed all events, tick.
+        if let Some(ref mut vfx) = vfx_engine {
+            let finish_y = race_config.finish_y;
+            let finish_line_px = {
+                let (px, py) = world_to_pixel_ctx(
+                    Vec2::new(scene.environment.world_bounds.width * 0.5, finish_y),
+                    &ctx,
+                );
+                Vec2::new(px, py)
+            };
+            let body_snap = build_body_snapshot(&phys_state, &ctx);
+            vfx.begin_frame(&body_snap, finish_line_px);
+            vfx.feed_events(&physics_events, &race_events, &|_| None);
+            vfx.update(dt);
+        }
+
+        trail_renderer.push_frame(&phys_state, dt);
         let mut frame = trail_renderer.render(&phys_state, &ctx);
+
+        // Composite VFX on top of the rendered frame.
+        if let Some(ref vfx) = vfx_engine {
+            vfx.render_into(&mut frame);
+        }
 
         // Draw race overlay (finish/checkpoint lines + rank panel).
         overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &ctx)?;
@@ -692,6 +732,43 @@ fn remux_with_audio(
     Ok(())
 }
 
+/// Convert a world-space `Vec2` to pixel-space `(x, y)` using a [`RenderContext`].
+fn world_to_pixel_ctx(world: Vec2, ctx: &RenderContext) -> (f32, f32) {
+    let px = (world.x - ctx.camera_origin.x) * ctx.scale;
+    let py = ctx.height as f32 - (world.y - ctx.camera_origin.y) * ctx.scale;
+    (px, py)
+}
+
+/// Build the per-body snapshot slice that [`VfxEngine::begin_frame`] expects:
+/// `(BodyId, pixel_pos, color, radius_px)` for each alive body.
+fn build_body_snapshot(
+    state: &rphys_physics::PhysicsState,
+    ctx: &RenderContext,
+) -> Vec<(rphys_physics::types::BodyId, Vec2, Color, f32)> {
+    state
+        .bodies
+        .iter()
+        .filter(|b| b.is_alive)
+        .map(|b| {
+            let (px, py) = world_to_pixel_ctx(b.position, ctx);
+            let radius_px = match &b.shape {
+                rphys_scene::ShapeKind::Circle { radius } => radius * ctx.scale,
+                rphys_scene::ShapeKind::Rectangle { width, height } => {
+                    (width.powi(2) + height.powi(2)).sqrt() * 0.5 * ctx.scale
+                }
+                rphys_scene::ShapeKind::Polygon { vertices } => {
+                    vertices
+                        .iter()
+                        .map(|v| (v.x * v.x + v.y * v.y).sqrt())
+                        .fold(0.0_f32, f32::max)
+                        * ctx.scale
+                }
+            };
+            (b.id, Vec2::new(px, py), b.color, radius_px)
+        })
+        .collect()
+}
+
 /// Translate a [`PhysicsEvent`] into zero or more [`AudioEvent`]s and queue them.
 fn collect_audio_event(
     audio: &mut OfflineAudioMixer,
@@ -848,6 +925,7 @@ mod tests {
             audio: SceneAudio::default(),
             race: None,
             camera: None,
+            vfx: None,
         }
     }
 
@@ -1095,6 +1173,7 @@ mod tests {
                 post_finish_secs: 0.0,
             }),
             camera: None,
+            vfx: None,
         }
     }
 
@@ -1373,6 +1452,7 @@ mod tests {
                 post_finish_secs,
             }),
             camera: None,
+            vfx: None,
         }
     }
 

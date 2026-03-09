@@ -41,13 +41,16 @@ mod de;
 mod parse;
 mod schema;
 mod types;
+pub mod vfx;
 
 pub use parse::{parse_scene, parse_scene_file};
 pub use schema::scene_json_schema;
 pub use types::{
-    BodyType, BoostConfig, CameraConfig, CameraMode, Checkpoint, Color, Destructible, EndCondition,
-    Environment, GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio,
-    SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
+    validate_vfx_config, BodyType, BoostConfig, BoostFlashConfig, CameraConfig, CameraMode,
+    Checkpoint, Color, Destructible, EliminationBurstConfig, EndCondition, Environment,
+    GravityWellConfig, ImpactSparksConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio,
+    SceneMeta, SceneObject, ShapeKind, Vec2, VfxConfig, VfxConfigError, WallConfig,
+    WinnerPopConfig, WorldBounds,
 };
 
 // Re-export error types at crate root.

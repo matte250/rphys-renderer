@@ -270,6 +270,73 @@ static SCENE_SCHEMA: &str = r##"{
           }
         }
       }
+    },
+
+    "vfx": {
+      "type": "object",
+      "description": "Optional particle-based visual effects. Omit to disable all VFX.",
+      "additionalProperties": false,
+      "properties": {
+        "max_particles": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 500,
+          "description": "Global particle pool cap across all live effects."
+        },
+        "impact_sparks": {
+          "type": "object",
+          "description": "Spark particles emitted at collision points.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":      { "type": "boolean", "default": false },
+            "count":        { "type": "integer", "minimum": 1, "default": 12 },
+            "lifetime_secs":{ "type": "number", "exclusiveMinimum": 0, "default": 0.25 },
+            "size_px":      { "type": "number", "exclusiveMinimum": 0, "default": 2.0 },
+            "speed":        { "type": "number", "exclusiveMinimum": 0, "default": 200.0 }
+          }
+        },
+        "boost_flash": {
+          "type": "object",
+          "description": "Glow halo rendered around a ball when it hits a boost pad.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":       { "type": "boolean", "default": false },
+            "color":         { "$ref": "#/definitions/Color", "default": "#FFFFFF" },
+            "radius_px":     { "type": "number", "exclusiveMinimum": 0, "default": 8.0 },
+            "duration_secs": { "type": "number", "exclusiveMinimum": 0, "default": 0.3 }
+          }
+        },
+        "elimination_burst": {
+          "type": "object",
+          "description": "Explosion of particles at an eliminated racer's last position.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":      { "type": "boolean", "default": false },
+            "count":        { "type": "integer", "minimum": 1, "default": 30 },
+            "lifetime_secs":{ "type": "number", "exclusiveMinimum": 0, "default": 0.6 },
+            "size_px":      { "type": "number", "exclusiveMinimum": 0, "default": 3.0 },
+            "speed":        { "type": "number", "exclusiveMinimum": 0, "default": 300.0 }
+          }
+        },
+        "winner_pop": {
+          "type": "object",
+          "description": "Confetti burst fired at the finish line when the race winner crosses.",
+          "additionalProperties": false,
+          "properties": {
+            "enabled":      { "type": "boolean", "default": false },
+            "count":        { "type": "integer", "minimum": 1, "default": 60 },
+            "lifetime_secs":{ "type": "number", "exclusiveMinimum": 0, "default": 1.2 },
+            "size_px":      { "type": "number", "exclusiveMinimum": 0, "default": 4.0 },
+            "speed":        { "type": "number", "exclusiveMinimum": 0, "default": 350.0 },
+            "spread_deg":   { "type": "number", "exclusiveMinimum": 0, "maximum": 360, "default": 180.0 },
+            "colors": {
+              "type": "array",
+              "items": { "$ref": "#/definitions/Color" },
+              "description": "Color palette for confetti particles. Empty = gold + white + winner color."
+            }
+          }
+        }
+      }
     }
 
   },

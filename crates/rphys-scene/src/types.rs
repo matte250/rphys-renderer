@@ -564,6 +564,261 @@ impl Default for CameraConfig {
     }
 }
 
+// ── VFX config types ──────────────────────────────────────────────────────────
+
+/// Validation error for a [`VfxConfig`] field.
+#[derive(Debug, thiserror::Error)]
+pub enum VfxConfigError {
+    /// A field has a value outside its valid range.
+    #[error("vfx.{field}: value {value} is out of range ({reason})")]
+    OutOfRange {
+        /// Dotted path to the invalid field (e.g. `"impact_sparks.count"`).
+        field: &'static str,
+        /// The value that failed validation.
+        value: f32,
+        /// Human-readable reason the value is invalid.
+        reason: &'static str,
+    },
+    /// A hex color string is malformed.
+    #[error("vfx.{field}: invalid hex color '{value}' — expected #RRGGBB or #RRGGBBAA")]
+    InvalidColor {
+        /// Dotted field path.
+        field: &'static str,
+        /// The offending string value.
+        value: String,
+    },
+}
+
+/// Impact-sparks effect configuration.
+///
+/// Emits a burst of short-lived particle dots at the collision point when
+/// a ball hits a wall or another ball.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImpactSparksConfig {
+    /// Whether the effect is active.  Default: `false`.
+    pub enabled: bool,
+    /// Number of spark particles emitted per impact.  Default: `12`.
+    pub count: usize,
+    /// Seconds each spark lives before being removed.  Default: `0.25`.
+    pub lifetime_secs: f32,
+    /// Dot radius of each spark in pixels.  Default: `2.0`.
+    pub size_px: f32,
+    /// Outward launch speed in pixels per second.  Default: `200.0`.
+    pub speed: f32,
+}
+
+impl Default for ImpactSparksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            count: 12,
+            lifetime_secs: 0.25,
+            size_px: 2.0,
+            speed: 200.0,
+        }
+    }
+}
+
+/// Boost-flash effect configuration.
+///
+/// Renders a glowing halo around a ball when it contacts a boost pad.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoostFlashConfig {
+    /// Whether the effect is active.  Default: `false`.
+    pub enabled: bool,
+    /// Color of the flash glow.  Default: opaque white (`#FFFFFF`).
+    pub color: Color,
+    /// Glow radius extension beyond the ball's edge, in pixels.  Default: `8.0`.
+    pub radius_px: f32,
+    /// Duration of the flash fade-out in seconds.  Default: `0.3`.
+    pub duration_secs: f32,
+}
+
+impl Default for BoostFlashConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: Color::WHITE,
+            radius_px: 8.0,
+            duration_secs: 0.3,
+        }
+    }
+}
+
+/// Elimination-burst effect configuration.
+///
+/// Explodes a burst of particles at a ball's last position when it is
+/// eliminated from the race.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EliminationBurstConfig {
+    /// Whether the effect is active.  Default: `false`.
+    pub enabled: bool,
+    /// Number of burst particles.  Default: `30`.
+    pub count: usize,
+    /// Seconds each particle lives.  Default: `0.6`.
+    pub lifetime_secs: f32,
+    /// Dot radius of each particle in pixels.  Default: `3.0`.
+    pub size_px: f32,
+    /// Outward launch speed in pixels per second.  Default: `300.0`.
+    pub speed: f32,
+}
+
+impl Default for EliminationBurstConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            count: 30,
+            lifetime_secs: 0.6,
+            size_px: 3.0,
+            speed: 300.0,
+        }
+    }
+}
+
+/// Winner-pop confetti effect configuration.
+///
+/// Fires a wide confetti burst at the finish line when the first racer wins.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WinnerPopConfig {
+    /// Whether the effect is active.  Default: `false`.
+    pub enabled: bool,
+    /// Number of confetti particles.  Default: `60`.
+    pub count: usize,
+    /// Seconds each particle lives.  Default: `1.2`.
+    pub lifetime_secs: f32,
+    /// Dot radius of each particle in pixels.  Default: `4.0`.
+    pub size_px: f32,
+    /// Launch speed in pixels per second.  Default: `350.0`.
+    pub speed: f32,
+    /// Fan spread angle in degrees (centred upward).  Default: `180.0`.
+    pub spread_deg: f32,
+    /// Explicit palette of colors for confetti particles.
+    ///
+    /// When empty (the default), the renderer uses gold + white + the
+    /// winner ball's color.
+    pub colors: Vec<Color>,
+}
+
+impl Default for WinnerPopConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            count: 60,
+            lifetime_secs: 1.2,
+            size_px: 4.0,
+            speed: 350.0,
+            spread_deg: 180.0,
+            colors: Vec::new(),
+        }
+    }
+}
+
+/// Top-level VFX configuration, parsed from the optional `vfx:` YAML block.
+///
+/// When the block is absent the renderer receives `None` and skips all VFX
+/// code paths (zero performance cost on legacy scenes).
+#[derive(Debug, Clone, PartialEq)]
+pub struct VfxConfig {
+    /// Global particle cap across all live effects.
+    ///
+    /// New bursts that would exceed this cap are silently truncated.
+    /// Default: `500`.
+    pub max_particles: usize,
+    /// Impact sparks emitted on ball/wall collisions.
+    pub impact_sparks: ImpactSparksConfig,
+    /// Boost-pad glow flash on boosted balls.
+    pub boost_flash: BoostFlashConfig,
+    /// Explosion burst when a racer is eliminated.
+    pub elimination_burst: EliminationBurstConfig,
+    /// Confetti burst when the race winner crosses the finish line.
+    pub winner_pop: WinnerPopConfig,
+}
+
+impl Default for VfxConfig {
+    fn default() -> Self {
+        Self {
+            max_particles: 500,
+            impact_sparks: ImpactSparksConfig::default(),
+            boost_flash: BoostFlashConfig::default(),
+            elimination_burst: EliminationBurstConfig::default(),
+            winner_pop: WinnerPopConfig::default(),
+        }
+    }
+}
+
+/// Validate all fields of a [`VfxConfig`] and return the first error found,
+/// or `Ok(())` if everything is in range.
+///
+/// # Errors
+///
+/// Returns [`VfxConfigError::OutOfRange`] when any numeric field is <= 0
+/// (particle counts, lifetimes, speeds, sizes) or outside its allowed
+/// range (`spread_deg` must be in `(0, 360]`).
+pub fn validate_vfx_config(cfg: &VfxConfig) -> Result<(), VfxConfigError> {
+    macro_rules! require_pos {
+        ($field:expr, $val:expr) => {
+            if $val <= 0.0 {
+                return Err(VfxConfigError::OutOfRange {
+                    field: $field,
+                    value: $val,
+                    reason: "must be > 0",
+                });
+            }
+        };
+    }
+    macro_rules! require_usize_pos {
+        ($field:expr, $val:expr) => {
+            if $val == 0 {
+                return Err(VfxConfigError::OutOfRange {
+                    field: $field,
+                    value: $val as f32,
+                    reason: "must be >= 1",
+                });
+            }
+        };
+    }
+
+    // max_particles
+    require_usize_pos!("max_particles", cfg.max_particles);
+
+    // impact_sparks
+    require_usize_pos!("impact_sparks.count", cfg.impact_sparks.count);
+    require_pos!(
+        "impact_sparks.lifetime_secs",
+        cfg.impact_sparks.lifetime_secs
+    );
+    require_pos!("impact_sparks.size_px", cfg.impact_sparks.size_px);
+    require_pos!("impact_sparks.speed", cfg.impact_sparks.speed);
+
+    // boost_flash
+    require_pos!("boost_flash.radius_px", cfg.boost_flash.radius_px);
+    require_pos!("boost_flash.duration_secs", cfg.boost_flash.duration_secs);
+
+    // elimination_burst
+    require_usize_pos!("elimination_burst.count", cfg.elimination_burst.count);
+    require_pos!(
+        "elimination_burst.lifetime_secs",
+        cfg.elimination_burst.lifetime_secs
+    );
+    require_pos!("elimination_burst.size_px", cfg.elimination_burst.size_px);
+    require_pos!("elimination_burst.speed", cfg.elimination_burst.speed);
+
+    // winner_pop
+    require_usize_pos!("winner_pop.count", cfg.winner_pop.count);
+    require_pos!("winner_pop.lifetime_secs", cfg.winner_pop.lifetime_secs);
+    require_pos!("winner_pop.size_px", cfg.winner_pop.size_px);
+    require_pos!("winner_pop.speed", cfg.winner_pop.speed);
+    if !(0.0..=360.0).contains(&cfg.winner_pop.spread_deg) || cfg.winner_pop.spread_deg <= 0.0 {
+        return Err(VfxConfigError::OutOfRange {
+            field: "winner_pop.spread_deg",
+            value: cfg.winner_pop.spread_deg,
+            reason: "must be in range (0, 360]",
+        });
+    }
+
+    Ok(())
+}
+
 // ── Top-level scene ───────────────────────────────────────────────────────────
 
 /// A complete, validated scene definition.
@@ -592,4 +847,8 @@ pub struct Scene {
     ///
     /// When `None`, the export pipeline uses [`CameraConfig::default()`].
     pub camera: Option<CameraConfig>,
+    /// Optional particle-based visual effects configuration.
+    ///
+    /// When `None`, no VFX code paths run (zero overhead on legacy scenes).
+    pub vfx: Option<VfxConfig>,
 }

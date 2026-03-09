@@ -26,6 +26,7 @@ pub(crate) struct RawScene {
     pub audio: Option<RawSceneAudio>,
     pub race: Option<RawRaceConfig>,
     pub camera: Option<RawCameraConfig>,
+    pub vfx: Option<RawVfxConfig>,
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
@@ -209,4 +210,57 @@ pub(crate) struct RawCameraConfig {
     pub finish_zoom_factor: Option<f32>,
     pub finish_zoom_lerp: Option<f32>,
     pub lock_horizontal: Option<bool>,
+}
+
+// ── VFX config ────────────────────────────────────────────────────────────────
+
+/// Raw impact-sparks sub-config.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawImpactSparksConfig {
+    pub enabled: Option<bool>,
+    pub count: Option<usize>,
+    pub lifetime_secs: Option<f32>,
+    pub size_px: Option<f32>,
+    pub speed: Option<f32>,
+}
+
+/// Raw boost-flash sub-config.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawBoostFlashConfig {
+    pub enabled: Option<bool>,
+    pub color: Option<String>,
+    pub radius_px: Option<f32>,
+    pub duration_secs: Option<f32>,
+}
+
+/// Raw elimination-burst sub-config.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawEliminationBurstConfig {
+    pub enabled: Option<bool>,
+    pub count: Option<usize>,
+    pub lifetime_secs: Option<f32>,
+    pub size_px: Option<f32>,
+    pub speed: Option<f32>,
+}
+
+/// Raw winner-pop sub-config.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawWinnerPopConfig {
+    pub enabled: Option<bool>,
+    pub count: Option<usize>,
+    pub lifetime_secs: Option<f32>,
+    pub size_px: Option<f32>,
+    pub speed: Option<f32>,
+    pub spread_deg: Option<f32>,
+    pub colors: Option<Vec<String>>,
+}
+
+/// Raw top-level VFX config — mirrors the optional `vfx:` YAML block.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawVfxConfig {
+    pub max_particles: Option<usize>,
+    pub impact_sparks: Option<RawImpactSparksConfig>,
+    pub boost_flash: Option<RawBoostFlashConfig>,
+    pub elimination_burst: Option<RawEliminationBurstConfig>,
+    pub winner_pop: Option<RawWinnerPopConfig>,
 }

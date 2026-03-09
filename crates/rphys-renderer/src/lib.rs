@@ -26,6 +26,9 @@ pub use camera::{CameraController, FollowCamera, RaceCamera, RaceCameraConfig, S
 pub mod trail;
 pub use trail::{TrailConfig, TrailRenderer};
 
+pub mod vfx;
+pub use vfx::VfxSystem;
+
 use rphys_physics::types::{BodyState, PhysicsState};
 use rphys_scene::{BodyType, Color, ShapeKind, Vec2};
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};

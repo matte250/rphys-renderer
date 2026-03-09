@@ -575,6 +575,7 @@ mod tests {
             audio: SceneAudio::default(),
             race: Some(race_config),
             camera: None,
+            vfx: None,
         }
     }
 
@@ -597,6 +598,7 @@ mod tests {
             audio: SceneAudio::default(),
             race: Some(race_config),
             camera: None,
+            vfx: None,
         }
     }
 
@@ -610,6 +612,7 @@ mod tests {
             audio: SceneAudio::default(),
             race: None,
             camera: None,
+            vfx: None,
         }
     }
 

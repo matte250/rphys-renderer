@@ -806,8 +806,10 @@ dependencies = [
  "rphys-race",
  "rphys-renderer",
  "rphys-scene",
+ "rphys-vfx",
  "tempfile",
  "thiserror",
+ "tiny-skia",
 ]
 
 [[package]]
@@ -867,6 +869,17 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "rphys-vfx"
+version = "0.1.0"
+dependencies = [
+ "rphys-physics",
+ "rphys-race",
+ "rphys-renderer",
+ "rphys-scene",
  "thiserror",
 ]
 
