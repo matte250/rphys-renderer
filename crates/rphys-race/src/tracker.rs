@@ -627,6 +627,7 @@ mod tests {
             announcement_hold_secs: 2.0,
             checkpoints: Vec::new(),
             elimination_interval_secs: None,
+            post_finish_secs: 0.0,
         }
     }
 
@@ -753,6 +754,7 @@ mod tests {
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
                 elimination_interval_secs: None,
+                post_finish_secs: 0.0,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -804,6 +806,7 @@ mod tests {
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
                 elimination_interval_secs: None,
+                post_finish_secs: 0.0,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -852,6 +855,7 @@ mod tests {
                     label: Some("Halfway".to_string()),
                 }],
                 elimination_interval_secs: None,
+                post_finish_secs: 0.0,
             },
             Some(EndCondition::TimeLimit { seconds: 15.0 }),
         );
@@ -970,6 +974,7 @@ mod tests {
             announcement_hold_secs: 2.0,
             checkpoints: Vec::new(),
             elimination_interval_secs: Some(interval_secs),
+            post_finish_secs: 0.0,
         }
     }
 
@@ -992,6 +997,7 @@ mod tests {
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
                 elimination_interval_secs: Some(3.0),
+                post_finish_secs: 0.0,
             },
             Some(EndCondition::TimeLimit { seconds: 20.0 }),
         );
@@ -1046,6 +1052,7 @@ mod tests {
                 announcement_hold_secs: 2.0,
                 checkpoints: Vec::new(),
                 elimination_interval_secs: Some(3.0),
+                post_finish_secs: 0.0,
             },
             Some(EndCondition::TimeLimit { seconds: 20.0 }),
         );

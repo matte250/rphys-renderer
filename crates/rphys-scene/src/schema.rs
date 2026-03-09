@@ -244,6 +244,12 @@ static SCENE_SCHEMA: &str = r##"{
           "exclusiveMinimum": 0,
           "description": "When set, the last-place racer is eliminated every this many seconds. Omit or null to disable."
         },
+        "post_finish_secs": {
+          "type": "number",
+          "minimum": 0.0,
+          "default": 0.0,
+          "description": "Seconds to continue simulating after the first racer crosses the finish line so that subsequent racers can also finish and be ranked. 0 (default) stops immediately on the first finish."
+        },
         "checkpoints": {
           "type": "array",
           "description": "Optional milestone Y-coordinates shown as horizontal lines with labels.",

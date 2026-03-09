@@ -873,6 +873,15 @@ fn convert_race_config(
         }
     }
 
+    let post_finish_secs = raw.post_finish_secs.unwrap_or(0.0);
+    if post_finish_secs < 0.0 {
+        errors.push(ValidationError::InvalidValue {
+            name: "race.post_finish_secs".to_string(),
+            message: format!("race.post_finish_secs must be >= 0, got {post_finish_secs}"),
+        });
+        ok = false;
+    }
+
     if !ok {
         return None;
     }
@@ -883,6 +892,7 @@ fn convert_race_config(
         announcement_hold_secs,
         checkpoints,
         elimination_interval_secs,
+        post_finish_secs,
     })
 }
 
@@ -2516,6 +2526,81 @@ end_condition:
             scene.end_condition,
             Some(EndCondition::FirstToReach { .. })
         ));
+    }
+
+    // ── post_finish_secs tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_post_finish_secs_explicit_value() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  post_finish_secs: 5.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse post_finish_secs");
+        let race = scene.race.as_ref().expect("race should be Some");
+        assert!(
+            (race.post_finish_secs - 5.0).abs() < 1e-6,
+            "expected post_finish_secs == 5.0, got {}",
+            race.post_finish_secs
+        );
+    }
+
+    #[test]
+    fn test_post_finish_secs_defaults_to_zero_when_absent() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("should parse without post_finish_secs");
+        let race = scene.race.as_ref().expect("race should be Some");
+        assert!(
+            race.post_finish_secs.abs() < 1e-6,
+            "expected post_finish_secs == 0.0 when absent, got {}",
+            race.post_finish_secs
+        );
+    }
+
+    #[test]
+    fn test_post_finish_secs_explicit_zero_is_valid() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  post_finish_secs: 0.0
+"#,
+        );
+        let scene = parse_scene(&yaml).expect("post_finish_secs=0.0 should be valid");
+        let race = scene.race.as_ref().expect("race should be Some");
+        assert!(
+            race.post_finish_secs.abs() < 1e-6,
+            "expected 0.0, got {}",
+            race.post_finish_secs
+        );
+    }
+
+    #[test]
+    fn test_post_finish_secs_negative_returns_validation_error() {
+        let yaml = minimal_yaml_with(
+            r#"race:
+  finish_y: 2.0
+  post_finish_secs: -1.0
+"#,
+        );
+        let err = parse_scene(&yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(
+                errs.iter().any(|e| matches!(
+                    e,
+                    ValidationError::InvalidValue { name, message }
+                        if name == "race.post_finish_secs" && message.contains("post_finish_secs")
+                )),
+                "expected validation error for negative post_finish_secs; errors: {errs:?}"
+            );
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
     }
 
     // ── Boost config tests ────────────────────────────────────────────────────

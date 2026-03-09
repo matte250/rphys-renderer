@@ -384,6 +384,10 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     let mut frame_count = 0u64;
     let mut physics_time: f32 = 0.0; // accumulated physics time (NOT wall-clock frames)
 
+    // Set to `Some(deadline)` when the first racer finishes.
+    // The export loop runs until `physics_time >= deadline`.
+    let mut post_finish_deadline: Option<f32> = None;
+
     loop {
         // Determine if the leader is in the slowdown zone.
         let leader_y = tracker
@@ -457,11 +461,18 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
 
         frame_count += 1;
 
-        // Exit when the race or physics is done, or safety cap reached.
-        if tracker.is_race_complete()
-            || tracker.is_physics_complete()
-            || physics_time >= max_duration
-        {
+        // Arm the post-finish deadline the moment the first racer finishes.
+        if tracker.is_race_complete() && post_finish_deadline.is_none() {
+            post_finish_deadline = Some(physics_time + race_config.post_finish_secs);
+        }
+
+        // Stop when the post-finish period has elapsed, physics is exhausted,
+        // or the safety-cap (max_duration) is reached.
+        let post_finish_expired = post_finish_deadline
+            .map(|deadline| physics_time >= deadline)
+            .unwrap_or(false);
+
+        if post_finish_expired || tracker.is_physics_complete() || physics_time >= max_duration {
             break;
         }
     }
@@ -1081,6 +1092,7 @@ mod tests {
                 announcement_hold_secs: 0.0, // no hold to keep test fast
                 checkpoints: vec![],
                 elimination_interval_secs: None,
+                post_finish_secs: 0.0,
             }),
             camera: None,
         }
@@ -1288,6 +1300,186 @@ mod tests {
             metadata.len() > 0,
             "output file should be non-empty (got {} bytes)",
             metadata.len()
+        );
+    }
+
+    // ── post-finish run-on period tests ───────────────────────────────────────
+
+    /// Build a race scene designed for post-finish deadline testing.
+    ///
+    /// Two balls drop under gravity toward `finish_y = 2.0`:
+    /// - "First"  starts at y=2.5  → crosses the line in ~0.32 s physics time.
+    /// - "Second" starts at y=5.0  → crosses ~0.46 s later in physics time.
+    ///
+    /// Both balls start inside the slowdown zone (below y=8.0), so `compute_
+    /// slowdown_dt` returns 25% of the frame delta throughout.
+    fn post_finish_race_scene(post_finish_secs: f32) -> Scene {
+        let make_ball = |name: &str, x: f32, y: f32, color: Color| SceneObject {
+            name: Some(name.to_string()),
+            shape: ShapeKind::Circle { radius: 0.4 },
+            position: Vec2::new(x, y),
+            velocity: Vec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: BodyType::Dynamic,
+            material: Material {
+                restitution: 0.05,
+                friction: 0.5,
+                density: 1.0,
+            },
+            color,
+            tags: vec!["racer".to_string()],
+            destructible: None,
+            boost: None,
+            gravity_well: None,
+            audio: ObjectAudio::default(),
+        };
+
+        Scene {
+            version: "1".to_string(),
+            meta: SceneMeta {
+                name: "post_finish_test".to_string(),
+                description: None,
+                author: None,
+                duration_hint: None,
+            },
+            environment: Environment {
+                gravity: Vec2::new(0.0, -9.81),
+                background_color: Color::rgb(20, 20, 30),
+                world_bounds: WorldBounds {
+                    width: 20.0,
+                    height: 20.0,
+                },
+                walls: WallConfig {
+                    visible: true,
+                    color: Color::WHITE,
+                    thickness: 0.5,
+                },
+            },
+            objects: vec![
+                // Ball 1: just above finish line — wins first.
+                make_ball("First", 6.0, 2.5, Color::rgb(220, 50, 50)),
+                // Ball 2: starts higher — crosses later (gap ≈ 0.46 s physics time).
+                make_ball("Second", 14.0, 5.0, Color::rgb(50, 100, 220)),
+            ],
+            end_condition: None,
+            audio: SceneAudio::default(),
+            race: Some(RaceConfig {
+                finish_y: 2.0,
+                racer_tag: "racer".to_string(),
+                announcement_hold_secs: 0.5,
+                checkpoints: vec![],
+                elimination_interval_secs: None,
+                post_finish_secs,
+            }),
+            camera: None,
+        }
+    }
+
+    /// Simulate the post-finish deadline logic used in `export_race()` against
+    /// a live `RaceTracker`, without requiring ffmpeg.
+    ///
+    /// Returns the `finished` vec at the point the loop would have broken.
+    fn run_post_finish_sim(scene: &Scene) -> Vec<rphys_race::FinishedEntry> {
+        let race_config = scene.race.as_ref().unwrap();
+        let post_finish_secs = race_config.post_finish_secs;
+
+        let physics_cfg = PhysicsConfig {
+            max_steps_per_call: u32::MAX,
+            ..PhysicsConfig::default()
+        };
+        let mut tracker = RaceTracker::new(scene, physics_cfg).unwrap();
+
+        let frame_dt = 1.0_f32 / 60.0;
+        let mut physics_time: f32 = 0.0;
+        let mut post_finish_deadline: Option<f32> = None;
+        let max_duration = 60.0_f32;
+
+        loop {
+            let leader_y = tracker
+                .physics_state()
+                .bodies
+                .iter()
+                .filter(|b| b.is_alive && b.tags.iter().any(|t| t == &race_config.racer_tag))
+                .map(|b| b.position.y)
+                .reduce(f32::min)
+                .unwrap_or(f32::MAX);
+
+            let dt = compute_slowdown_dt(leader_y, race_config.finish_y, 6.0, 0.25, frame_dt);
+            physics_time += dt;
+            tracker.advance_to(physics_time).unwrap();
+
+            if tracker.is_race_complete() && post_finish_deadline.is_none() {
+                post_finish_deadline = Some(physics_time + post_finish_secs);
+            }
+
+            let post_finish_expired = post_finish_deadline
+                .map(|d| physics_time >= d)
+                .unwrap_or(false);
+
+            if post_finish_expired || tracker.is_physics_complete() || physics_time >= max_duration
+            {
+                break;
+            }
+        }
+
+        tracker.race_state().finished.clone()
+    }
+
+    /// `post_finish_secs: 5.0` — both racers must be ranked before the loop exits.
+    ///
+    /// Ball "Second" starts 2.5 m above finish and takes ≈0.46 s more physics
+    /// time than "First" to cross.  A 5-second run-on window is more than
+    /// sufficient.  No ffmpeg required.
+    #[test]
+    fn test_post_finish_secs_allows_second_finisher_to_rank() {
+        let scene = post_finish_race_scene(5.0);
+        let finished = run_post_finish_sim(&scene);
+
+        assert!(
+            finished.len() >= 2,
+            "with post_finish_secs=5.0 both racers should be ranked, \
+             but finished list has {} entries",
+            finished.len()
+        );
+
+        let rank1 = finished.iter().find(|e| e.finish_rank == 1);
+        let rank2 = finished.iter().find(|e| e.finish_rank == 2);
+        assert!(rank1.is_some(), "finish_rank 1 should be assigned");
+        assert!(rank2.is_some(), "finish_rank 2 should be assigned");
+
+        if let (Some(r1), Some(r2)) = (rank1, rank2) {
+            assert!(
+                r1.finish_time_secs <= r2.finish_time_secs,
+                "rank-1 finish time ({:.3}s) should be ≤ rank-2 ({:.3}s)",
+                r1.finish_time_secs,
+                r2.finish_time_secs
+            );
+        }
+    }
+
+    /// `post_finish_secs: 0.0` — preserves existing behaviour: loop exits the
+    /// same iteration the first racer crosses, only the winner is ranked.
+    ///
+    /// With deadline = physics_time + 0.0, `post_finish_expired` fires
+    /// immediately.  Ball "Second" starts 2.5 m above finish and cannot have
+    /// crossed within a single physics frame.  No ffmpeg required.
+    #[test]
+    fn test_post_finish_zero_stops_immediately() {
+        let scene = post_finish_race_scene(0.0);
+        let finished = run_post_finish_sim(&scene);
+
+        assert_eq!(
+            finished.len(),
+            1,
+            "with post_finish_secs=0.0 only the winner should be ranked, \
+             but finished list has {} entries",
+            finished.len()
+        );
+        assert_eq!(finished[0].finish_rank, 1, "sole entry must be rank 1");
+        assert_eq!(
+            finished[0].display_name, "First",
+            "winner should be 'First' (the ball starting closer to finish)"
         );
     }
 }

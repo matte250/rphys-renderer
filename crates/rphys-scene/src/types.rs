@@ -334,6 +334,12 @@ pub struct RaceConfig {
     ///
     /// Must be > 0 when present. `None` disables elimination mode (default).
     pub elimination_interval_secs: Option<f32>,
+    /// Seconds to keep simulating after the first racer crosses the finish line,
+    /// so that additional racers can also finish and be ranked.
+    ///
+    /// `0.0` means stop immediately when the winner is decided (default,
+    /// preserves existing behaviour). Must be >= 0.
+    pub post_finish_secs: f32,
 }
 
 impl Default for RaceConfig {
@@ -344,6 +350,7 @@ impl Default for RaceConfig {
             announcement_hold_secs: 2.0,
             checkpoints: Vec::new(),
             elimination_interval_secs: None,
+            post_finish_secs: 0.0,
         }
     }
 }

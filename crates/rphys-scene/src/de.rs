@@ -160,6 +160,7 @@ pub(crate) struct RawRaceConfig {
     pub racer_tag: Option<String>,
     pub announcement_hold_secs: Option<f32>,
     pub elimination_interval_secs: Option<f32>,
+    pub post_finish_secs: Option<f32>,
     #[serde(default)]
     pub checkpoints: Vec<RawCheckpoint>,
 }
