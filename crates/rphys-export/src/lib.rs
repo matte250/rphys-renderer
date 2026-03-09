@@ -25,12 +25,48 @@ use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::{RaceEvent, RaceTracker};
 use rphys_renderer::{
-    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, TinySkiaRenderer,
-    TrailConfig, TrailRenderer,
+    CameraController, FollowCamera, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
+    StaticCamera, TinySkiaRenderer, TrailConfig, TrailRenderer,
 };
-use rphys_scene::{Color, Scene, Vec2};
+use rphys_scene::{CameraConfig, CameraMode, Color, Scene, Vec2};
 use tempfile::NamedTempFile;
 use thiserror::Error;
+
+// ── Camera dispatch ───────────────────────────────────────────────────────────
+
+/// Holds one of the three supported camera implementations for the race export.
+///
+/// This enum lets the main export loop use a single code path while dispatching
+/// to the correct camera without heap allocation.
+enum ActiveCamera {
+    Race(RaceCamera),
+    Follow(FollowCamera),
+    Static(StaticCamera),
+}
+
+impl ActiveCamera {
+    /// Advance the camera for one rendered frame and return the [`RenderContext`].
+    ///
+    /// For `Follow`, the leader position, current frame's physics events, and
+    /// race completion state are required to implement shake and zoom correctly.
+    fn get_ctx(
+        &mut self,
+        state: &rphys_physics::PhysicsState,
+        dt: f32,
+        events: &[rphys_physics::PhysicsEvent],
+        leader_pos: Option<Vec2>,
+        race_complete: bool,
+    ) -> RenderContext {
+        match self {
+            ActiveCamera::Race(cam) => cam.update(state, dt),
+            ActiveCamera::Static(cam) => cam.update(state, dt),
+            ActiveCamera::Follow(cam) => {
+                cam.update(leader_pos, events, race_complete);
+                cam.render_context()
+            }
+        }
+    }
+}
 
 // ── Export presets ────────────────────────────────────────────────────────────
 
@@ -303,11 +339,30 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         background_color: bg,
     };
 
-    let camera_cfg = RaceCameraConfig {
-        racer_tag: race_config.racer_tag.clone(),
-        ..RaceCameraConfig::default()
+    // Resolve the camera configuration; fall back to default (Race mode) when
+    // the scene does not specify a `camera:` block.
+    let cam_cfg: CameraConfig = scene.camera.clone().unwrap_or_default();
+
+    let world_center = Vec2::new(world.width / 2.0, world.height / 2.0);
+
+    let mut active_camera = match cam_cfg.mode {
+        CameraMode::Static => {
+            let static_cam = StaticCamera::new(initial_ctx.clone());
+            ActiveCamera::Static(static_cam)
+        }
+        CameraMode::FollowLeader => {
+            let follow_cam =
+                FollowCamera::new(cam_cfg, race_scale, initial_ctx.clone(), world_center);
+            ActiveCamera::Follow(follow_cam)
+        }
+        CameraMode::Race => {
+            let race_cfg = RaceCameraConfig {
+                racer_tag: race_config.racer_tag.clone(),
+                ..RaceCameraConfig::default()
+            };
+            ActiveCamera::Race(RaceCamera::new(race_cfg, initial_ctx))
+        }
     };
-    let mut camera = RaceCamera::new(camera_cfg, initial_ctx);
 
     let mut overlay = OverlayRenderer::new();
 
@@ -371,9 +426,24 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             }
         }
 
-        // Render frame with race camera (with trail ghosts).
+        // Render frame with camera (with trail ghosts).
         let phys_state = tracker.physics_state();
-        let ctx = camera.update(&phys_state, frame_dt);
+        let race_complete = tracker.race_state().winner.is_some();
+        // For follow-leader camera: find the rank-1 racer's world position.
+        let leader_pos = tracker.race_state().active.first().and_then(|r| {
+            phys_state
+                .bodies
+                .iter()
+                .find(|b| b.id == r.body_id)
+                .map(|b| b.position)
+        });
+        let ctx = active_camera.get_ctx(
+            &phys_state,
+            frame_dt,
+            &physics_events,
+            leader_pos,
+            race_complete,
+        );
         trail_renderer.push_frame(&phys_state);
         let mut frame = trail_renderer.render(&phys_state, &ctx);
 
@@ -405,7 +475,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     if hold_frames > 0 && tracker.race_state().winner.is_some() {
         let phys_state = tracker.physics_state();
         // Camera stays at its last position; update with dt=0.0 to freeze it.
-        let last_ctx = camera.update(&phys_state, 0.0);
+        let last_ctx = active_camera.get_ctx(&phys_state, 0.0, &[], None, true);
         let mut frame = trail_renderer.render(&phys_state, &last_ctx);
 
         overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &last_ctx)?;
@@ -766,6 +836,7 @@ mod tests {
             end_condition: Some(rphys_scene::EndCondition::TimeLimit { seconds: 1.0 }),
             audio: SceneAudio::default(),
             race: None,
+            camera: None,
         }
     }
 
@@ -1011,6 +1082,7 @@ mod tests {
                 checkpoints: vec![],
                 elimination_interval_secs: None,
             }),
+            camera: None,
         }
     }
 

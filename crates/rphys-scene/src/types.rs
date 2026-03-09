@@ -452,6 +452,97 @@ pub struct SceneMeta {
     pub duration_hint: Option<f32>,
 }
 
+// ── Camera types ──────────────────────────────────────────────────────────────
+
+/// Camera mode used during export and preview.
+///
+/// Selects which [`CameraController`](rphys_renderer::CameraController)
+/// implementation is constructed for the export pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum CameraMode {
+    /// Fixed camera that shows the entire world with no scrolling.
+    Static,
+    /// Smooth-following camera that tracks the leading racer (existing behaviour).
+    #[default]
+    Race,
+    /// Dynamic follow-leader camera with shake and finish zoom.
+    FollowLeader,
+}
+
+/// Optional camera configuration block.
+///
+/// Add a `camera:` section to the scene YAML to customise camera behaviour.
+/// All fields are optional; missing fields use the documented defaults.
+/// If the `camera:` key is absent entirely, a `CameraConfig::default()` is used.
+///
+/// # Example
+///
+/// ```yaml
+/// camera:
+///   mode: follow_leader
+///   follow_lerp: 0.06
+///   look_ahead: 3.0
+///   shake_on_impact: true
+///   shake_intensity: 0.25
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraConfig {
+    /// Camera mode. Default: [`CameraMode::Race`] (existing smooth-follow behaviour).
+    pub mode: CameraMode,
+
+    /// Position smoothing factor applied per frame.
+    ///
+    /// `0.0` = instant snap, `1.0` = camera never moves.
+    /// Applied as `new_pos = lerp(cur, target, follow_lerp)`.
+    /// Default: `0.08`.
+    pub follow_lerp: f32,
+
+    /// Meters ahead of the leader in the travel direction to offset the camera.
+    ///
+    /// The leader is falling (downward race), so this adds lookahead below.
+    /// Default: `2.0`.
+    pub look_ahead: f32,
+
+    /// Enable camera shake on collision events. Default: `true`.
+    pub shake_on_impact: bool,
+
+    /// Maximum shake displacement in meters. Default: `0.3`.
+    pub shake_intensity: f32,
+
+    /// Per-frame shake decay multiplier (`< 1.0` decays, `1.0` = no decay).
+    /// Default: `0.85`.
+    pub shake_decay: f32,
+
+    /// Extra zoom multiplier on top of base scale (`1.0` = no change). Default: `1.0`.
+    pub zoom: f32,
+
+    /// Zoom in when the race winner is decided. Default: `true`.
+    pub finish_zoom: bool,
+
+    /// Zoom multiplier applied on race complete. Default: `1.5`.
+    pub finish_zoom_factor: f32,
+
+    /// Per-frame smoothing factor for the finish zoom transition. Default: `0.04`.
+    pub finish_zoom_lerp: f32,
+}
+
+impl Default for CameraConfig {
+    fn default() -> Self {
+        Self {
+            mode: CameraMode::Race,
+            follow_lerp: 0.08,
+            look_ahead: 2.0,
+            shake_on_impact: true,
+            shake_intensity: 0.3,
+            shake_decay: 0.85,
+            zoom: 1.0,
+            finish_zoom: true,
+            finish_zoom_factor: 1.5,
+            finish_zoom_lerp: 0.04,
+        }
+    }
+}
+
 // ── Top-level scene ───────────────────────────────────────────────────────────
 
 /// A complete, validated scene definition.
@@ -476,4 +567,8 @@ pub struct Scene {
     ///
     /// When `Some`, race mode is used for both export and preview.
     pub race: Option<RaceConfig>,
+    /// Optional camera configuration.
+    ///
+    /// When `None`, the export pipeline uses [`CameraConfig::default()`].
+    pub camera: Option<CameraConfig>,
 }

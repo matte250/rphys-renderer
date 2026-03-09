@@ -21,7 +21,7 @@
 //! - Static bodies: rendered at 80% of their defined alpha.
 
 pub mod camera;
-pub use camera::{CameraController, RaceCamera, RaceCameraConfig, StaticCamera};
+pub use camera::{CameraController, FollowCamera, RaceCamera, RaceCameraConfig, StaticCamera};
 
 pub mod trail;
 pub use trail::{TrailConfig, TrailRenderer};

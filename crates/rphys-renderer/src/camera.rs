@@ -4,8 +4,8 @@
 //! - [`StaticCamera`]: fixed camera that always returns the same [`RenderContext`].
 //! - [`RaceCamera`]: smooth-following camera that tracks the leading racer.
 
-use rphys_physics::PhysicsState;
-use rphys_scene::{Color, Vec2};
+use rphys_physics::{PhysicsEvent, PhysicsState};
+use rphys_scene::{CameraConfig, Color, Vec2};
 
 use crate::RenderContext;
 
@@ -243,6 +243,219 @@ impl CameraController for RaceCamera {
     /// Reset the camera to its initial position.
     fn reset(&mut self) {
         self.current_origin_y = self.initial_origin_y;
+    }
+}
+
+// ── FollowCamera ──────────────────────────────────────────────────────────────
+
+/// Dynamic camera that smoothly follows the race leader with camera shake and
+/// finish-line zoom.
+///
+/// Intended for `mode: follow_leader` in the scene YAML.  In the export
+/// pipeline, call [`FollowCamera::update`] each frame with the leader's world
+/// position, the physics events for that frame, and whether the race is
+/// complete.  Then read the resulting [`RenderContext`] via
+/// [`FollowCamera::render_context`].
+///
+/// # Smooth-follow algorithm (per frame)
+///
+/// ```text
+/// target = leader_pos - Vec2(0, look_ahead)   // look ahead below the leader
+/// current_pos = lerp(current_pos, target, follow_lerp)
+/// shake_offset = (random impulse on impact) then decay each frame
+/// scale = base_scale * current_zoom
+/// origin = current_pos - viewport_half_size + shake_offset
+/// ```
+pub struct FollowCamera {
+    config: CameraConfig,
+    /// Current smoothed camera target position in world space.
+    current_pos: Vec2,
+    /// Current shake offset (world space, decays each frame).
+    shake_offset: Vec2,
+    /// Current zoom multiplier (smoothly lerps toward `target_zoom`).
+    current_zoom: f32,
+    /// Target zoom (`config.zoom` normally; `config.zoom * finish_zoom_factor`
+    /// after race completes with `finish_zoom = true`).
+    target_zoom: f32,
+    /// Base pixels-per-metre scale (`viewport_width / world_width`).
+    base_scale: f32,
+    render_width: u32,
+    render_height: u32,
+    background_color: Color,
+    /// Fallback camera centre when no leader position is available.
+    world_center: Vec2,
+    /// Initial position stored for [`CameraController::reset`].
+    initial_pos: Vec2,
+    /// LCG PRNG state used to generate pseudo-random shake directions.
+    rng_state: u64,
+}
+
+impl FollowCamera {
+    /// Construct a `FollowCamera`.
+    ///
+    /// # Parameters
+    ///
+    /// - `config` — camera configuration from the scene YAML.
+    /// - `base_scale` — pixels per metre; typically `viewport_width / world_width`.
+    /// - `initial_ctx` — supplies render dimensions and background color.
+    /// - `world_center` — fallback world-space point when no leader is present.
+    pub fn new(
+        config: CameraConfig,
+        base_scale: f32,
+        initial_ctx: RenderContext,
+        world_center: Vec2,
+    ) -> Self {
+        let initial_zoom = config.zoom;
+        Self {
+            current_pos: world_center,
+            shake_offset: Vec2::ZERO,
+            current_zoom: initial_zoom,
+            target_zoom: initial_zoom,
+            base_scale,
+            render_width: initial_ctx.width,
+            render_height: initial_ctx.height,
+            background_color: initial_ctx.background_color,
+            world_center,
+            initial_pos: world_center,
+            rng_state: 0x5851_F42D_4C95_7F2D,
+            config,
+        }
+    }
+
+    /// Advance camera state for one rendered frame.
+    ///
+    /// - `leader_pos` — current world-space position of the rank-1 racer, or
+    ///   `None` if no racers are alive (camera holds its current position).
+    /// - `events` — physics events emitted during this frame's simulation
+    ///   steps.  Any [`PhysicsEvent::Collision`] or
+    ///   [`PhysicsEvent::WallBounce`] event triggers a shake impulse (when
+    ///   `shake_on_impact` is `true`).
+    /// - `race_complete` — set to `true` once the race winner has been decided.
+    ///   When `finish_zoom` is also `true`, the zoom begins transitioning
+    ///   toward `finish_zoom_factor`.
+    pub fn update(
+        &mut self,
+        leader_pos: Option<Vec2>,
+        events: &[PhysicsEvent],
+        race_complete: bool,
+    ) {
+        self.advance(leader_pos, events, race_complete);
+    }
+
+    /// Build a [`RenderContext`] from the current (post-[`update`](Self::update))
+    /// camera state.
+    pub fn render_context(&self) -> RenderContext {
+        let scale = self.base_scale * self.current_zoom;
+        let viewport_w = self.render_width as f32 / scale;
+        let viewport_h = self.render_height as f32 / scale;
+
+        // Camera origin = position of world-space point at the top-left of the
+        // viewport.  Adding shake on top makes the whole view jitter.
+        let origin_x = self.current_pos.x - viewport_w / 2.0 + self.shake_offset.x;
+        let origin_y = self.current_pos.y - viewport_h / 2.0 + self.shake_offset.y;
+
+        RenderContext {
+            width: self.render_width,
+            height: self.render_height,
+            camera_origin: Vec2::new(origin_x, origin_y),
+            scale,
+            background_color: self.background_color,
+        }
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    /// Core per-frame update called by both the inherent `update` method and
+    /// the [`CameraController`] trait implementation.
+    fn advance(&mut self, leader_pos: Option<Vec2>, events: &[PhysicsEvent], race_complete: bool) {
+        // 1. Target position: leader's position offset by look_ahead downward
+        //    (the leader is falling, so looking ahead means looking below).
+        let target = match leader_pos {
+            Some(pos) => Vec2::new(pos.x, pos.y - self.config.look_ahead),
+            None => self.world_center,
+        };
+
+        // 2. Exponentially smooth camera position toward target.
+        let lerp = self.config.follow_lerp;
+        self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+        self.current_pos.y += (target.y - self.current_pos.y) * lerp;
+
+        // 3. Camera shake.
+        if self.config.shake_on_impact {
+            let has_impact = events.iter().any(|e| {
+                matches!(
+                    e,
+                    PhysicsEvent::Collision(_) | PhysicsEvent::WallBounce { .. }
+                )
+            });
+            if has_impact {
+                // Add a random-direction impulse to the shake offset.
+                let angle = self.lcg_f32() * std::f32::consts::TAU;
+                let magnitude = self.lcg_f32() * self.config.shake_intensity;
+                self.shake_offset.x += magnitude * angle.cos();
+                self.shake_offset.y += magnitude * angle.sin();
+            }
+        }
+        // Decay shake every frame regardless of impacts.
+        self.shake_offset.x *= self.config.shake_decay;
+        self.shake_offset.y *= self.config.shake_decay;
+
+        // 4. Finish zoom.
+        if race_complete && self.config.finish_zoom {
+            self.target_zoom = self.config.zoom * self.config.finish_zoom_factor;
+        }
+        self.current_zoom += (self.target_zoom - self.current_zoom) * self.config.finish_zoom_lerp;
+    }
+
+    /// Pseudo-random `f32` in `[0, 1)` from a simple LCG.
+    ///
+    /// Used exclusively for shake direction/magnitude so there is no
+    /// dependency on the `rand` crate.  The sequence is deterministic given
+    /// the same `rng_state` seed.
+    fn lcg_f32(&mut self) -> f32 {
+        // Knuth multiplicative LCG coefficients (64-bit).
+        self.rng_state = self
+            .rng_state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        // Extract the upper 23 bits as the mantissa of a [1, 2) float, then
+        // subtract 1 to get [0, 1).
+        let bits = (self.rng_state >> 41) as u32;
+        f32::from_bits(0x3F80_0000 | bits) - 1.0
+    }
+}
+
+impl CameraController for FollowCamera {
+    /// Update using only the physics state snapshot (no explicit events).
+    ///
+    /// Extracts the leader position from `state.bodies` and calls the internal
+    /// advance with an empty event slice.  Shake is disabled in this path
+    /// because collision events are not available.  Use the inherent
+    /// [`FollowCamera::update`] method for full functionality.
+    fn update(&mut self, state: &PhysicsState, _dt: f32) -> RenderContext {
+        let leader_pos = state
+            .bodies
+            .iter()
+            .filter(|b| b.is_alive)
+            .min_by(|a, b| {
+                a.position
+                    .y
+                    .partial_cmp(&b.position.y)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|b| b.position);
+
+        self.advance(leader_pos, &[], false);
+        self.render_context()
+    }
+
+    /// Reset the camera to its initial state.
+    fn reset(&mut self) {
+        self.current_pos = self.initial_pos;
+        self.shake_offset = Vec2::ZERO;
+        self.current_zoom = self.config.zoom;
+        self.target_zoom = self.config.zoom;
+        self.rng_state = 0x5851_F42D_4C95_7F2D;
     }
 }
 
@@ -582,6 +795,249 @@ mod tests {
             (cam.current_origin_y - 0.0).abs() < 1e-5,
             "after reset, current_origin_y should be 0.0, got {}",
             cam.current_origin_y
+        );
+    }
+
+    // ── FollowCamera helpers ──────────────────────────────────────────────────
+
+    fn default_follow_config() -> CameraConfig {
+        CameraConfig::default()
+    }
+
+    fn follow_cam_at(world_center: Vec2) -> FollowCamera {
+        use rphys_scene::CameraMode;
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4; // viewport_width / world_width
+        FollowCamera::new(config, base_scale, ctx, world_center)
+    }
+
+    fn collision_event() -> PhysicsEvent {
+        use rphys_physics::types::{BodyId, CollisionInfo};
+        PhysicsEvent::Collision(CollisionInfo {
+            body_a: BodyId(0),
+            body_b: BodyId(1),
+            impulse: 10.0,
+        })
+    }
+
+    // ── FollowCamera: instant snap with follow_lerp=1.0 ──────────────────────
+
+    #[test]
+    fn test_follow_camera_lerp_one_snaps_instantly() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            follow_lerp: 1.0, // instant snap
+            look_ahead: 0.0,  // no look-ahead offset so we can predict exactly
+            shake_on_impact: false,
+            finish_zoom: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        let leader = Vec2::new(5.0, 20.0);
+        cam.update(Some(leader), &[], false);
+
+        // With lerp=1.0 the position should snap exactly to the target.
+        assert!(
+            (cam.current_pos.x - leader.x).abs() < 1e-5,
+            "x should snap instantly: got {}, expected {}",
+            cam.current_pos.x,
+            leader.x
+        );
+        assert!(
+            (cam.current_pos.y - leader.y).abs() < 1e-5,
+            "y should snap instantly: got {}, expected {}",
+            cam.current_pos.y,
+            leader.y
+        );
+    }
+
+    // ── FollowCamera: no movement with follow_lerp=0.0 ───────────────────────
+
+    #[test]
+    fn test_follow_camera_lerp_zero_never_moves() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            follow_lerp: 0.0, // camera never moves
+            shake_on_impact: false,
+            finish_zoom: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+        let initial_pos = cam.current_pos;
+
+        // Update toward a very different leader position
+        for _ in 0..50 {
+            cam.update(Some(Vec2::new(100.0, 100.0)), &[], false);
+        }
+
+        assert!(
+            (cam.current_pos.x - initial_pos.x).abs() < 1e-5,
+            "camera x should not have moved with lerp=0: {} vs {}",
+            cam.current_pos.x,
+            initial_pos.x
+        );
+        assert!(
+            (cam.current_pos.y - initial_pos.y).abs() < 1e-5,
+            "camera y should not have moved with lerp=0: {} vs {}",
+            cam.current_pos.y,
+            initial_pos.y
+        );
+    }
+
+    // ── FollowCamera: shake on Collision when shake_on_impact=true ────────────
+
+    #[test]
+    fn test_follow_camera_shake_on_impact_true() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            shake_on_impact: true,
+            shake_intensity: 0.5,
+            shake_decay: 1.0, // no decay — keeps shake offset for inspection
+            follow_lerp: 0.0, // don't move so we can inspect shake alone
+            finish_zoom: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        let events = [collision_event()];
+        cam.update(None, &events, false);
+
+        let shake_mag = (cam.shake_offset.x * cam.shake_offset.x
+            + cam.shake_offset.y * cam.shake_offset.y)
+            .sqrt();
+        assert!(
+            shake_mag > 0.0,
+            "shake_offset should be non-zero after a Collision event; got {:?}",
+            cam.shake_offset
+        );
+    }
+
+    // ── FollowCamera: no shake when shake_on_impact=false ─────────────────────
+
+    #[test]
+    fn test_follow_camera_shake_disabled() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            shake_on_impact: false,
+            follow_lerp: 0.0,
+            finish_zoom: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        let events = [collision_event()];
+        cam.update(None, &events, false);
+
+        assert!(
+            (cam.shake_offset.x).abs() < 1e-9 && (cam.shake_offset.y).abs() < 1e-9,
+            "shake_offset should remain zero when shake_on_impact=false; got {:?}",
+            cam.shake_offset
+        );
+    }
+
+    // ── FollowCamera: zoom lerps toward finish_zoom_factor on race complete ───
+
+    #[test]
+    fn test_follow_camera_finish_zoom_lerps() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            zoom: 1.0,
+            finish_zoom: true,
+            finish_zoom_factor: 2.0,
+            finish_zoom_lerp: 0.5, // large lerp so we converge quickly in tests
+            follow_lerp: 0.0,
+            shake_on_impact: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        // Before race complete — zoom should stay at initial value.
+        for _ in 0..10 {
+            cam.update(None, &[], false);
+        }
+        assert!(
+            (cam.current_zoom - 1.0).abs() < 1e-5,
+            "zoom should not change before race complete; got {}",
+            cam.current_zoom
+        );
+
+        // After race complete — zoom should start approaching finish_zoom_factor.
+        for _ in 0..20 {
+            cam.update(None, &[], true);
+        }
+        assert!(
+            cam.current_zoom > 1.0,
+            "zoom should have increased toward finish_zoom_factor; got {}",
+            cam.current_zoom
+        );
+        assert!(
+            cam.current_zoom <= 2.0,
+            "zoom should not exceed finish_zoom_factor=2.0; got {}",
+            cam.current_zoom
+        );
+        // After many frames it should be close to the target.
+        for _ in 0..200 {
+            cam.update(None, &[], true);
+        }
+        assert!(
+            (cam.current_zoom - 2.0).abs() < 0.05,
+            "zoom should converge near finish_zoom_factor=2.0; got {}",
+            cam.current_zoom
+        );
+    }
+
+    // ── FollowCamera: zoom stays at 1.0 when finish_zoom=false ───────────────
+
+    #[test]
+    fn test_follow_camera_finish_zoom_disabled() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            zoom: 1.0,
+            finish_zoom: false,
+            finish_zoom_factor: 2.0,
+            follow_lerp: 0.0,
+            shake_on_impact: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        for _ in 0..50 {
+            cam.update(None, &[], true); // race_complete=true but finish_zoom=false
+        }
+
+        assert!(
+            (cam.current_zoom - 1.0).abs() < 1e-5,
+            "zoom should stay at 1.0 when finish_zoom=false; got {}",
+            cam.current_zoom
         );
     }
 }

@@ -8,13 +8,13 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::de::{
-    RawEndCondition, RawEnvironment, RawObject, RawRaceConfig, RawScene, RawSceneAudio,
-    RawWallConfig,
+    RawCameraConfig, RawEndCondition, RawEnvironment, RawObject, RawRaceConfig, RawScene,
+    RawSceneAudio, RawWallConfig,
 };
 use crate::types::{
-    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment,
-    GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta,
-    SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
+    BodyType, BoostConfig, CameraConfig, CameraMode, Checkpoint, Color, Destructible, EndCondition,
+    Environment, GravityWellConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio,
+    SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig, WorldBounds,
 };
 
 // ── Error types ───────────────────────────────────────────────────────────────
@@ -199,6 +199,12 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         .as_ref()
         .and_then(|rc| convert_race_config(rc, &mut errors));
 
+    // Convert camera config (optional).
+    let camera = raw
+        .camera
+        .as_ref()
+        .and_then(|cc| convert_camera_config(cc, &mut errors));
+
     if !errors.is_empty() {
         return Err(ParseError::Validation(errors));
     }
@@ -225,6 +231,7 @@ fn parse_scene_inner(yaml: &str, base_dir: Option<&Path>) -> Result<Scene, Parse
         end_condition,
         audio,
         race,
+        camera,
     })
 }
 
@@ -876,6 +883,43 @@ fn convert_race_config(
         announcement_hold_secs,
         checkpoints,
         elimination_interval_secs,
+    })
+}
+
+/// Convert a [`RawCameraConfig`] into a [`CameraConfig`], recording validation errors.
+///
+/// Returns `None` only if the `mode` string is unrecognised.
+fn convert_camera_config(
+    raw: &RawCameraConfig,
+    errors: &mut Vec<ValidationError>,
+) -> Option<CameraConfig> {
+    let mode = match raw.mode.as_deref() {
+        None | Some("race") => CameraMode::Race,
+        Some("static") => CameraMode::Static,
+        Some("follow_leader") => CameraMode::FollowLeader,
+        Some(unknown) => {
+            errors.push(ValidationError::InvalidValue {
+                name: "camera.mode".to_string(),
+                message: format!(
+                    "unknown camera mode '{unknown}' \
+                     (expected 'static', 'race', or 'follow_leader')"
+                ),
+            });
+            return None;
+        }
+    };
+
+    Some(CameraConfig {
+        mode,
+        follow_lerp: raw.follow_lerp.unwrap_or(0.08),
+        look_ahead: raw.look_ahead.unwrap_or(2.0),
+        shake_on_impact: raw.shake_on_impact.unwrap_or(true),
+        shake_intensity: raw.shake_intensity.unwrap_or(0.3),
+        shake_decay: raw.shake_decay.unwrap_or(0.85),
+        zoom: raw.zoom.unwrap_or(1.0),
+        finish_zoom: raw.finish_zoom.unwrap_or(true),
+        finish_zoom_factor: raw.finish_zoom_factor.unwrap_or(1.5),
+        finish_zoom_lerp: raw.finish_zoom_lerp.unwrap_or(0.04),
     })
 }
 

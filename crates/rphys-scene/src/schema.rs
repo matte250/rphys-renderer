@@ -144,6 +144,74 @@ static SCENE_SCHEMA: &str = r##"{
       }
     },
 
+    "camera": {
+      "type": "object",
+      "description": "Optional camera configuration. Controls which camera mode is used during export.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["static", "race", "follow_leader"],
+          "default": "race",
+          "description": "Camera mode: 'static' (fixed), 'race' (smooth-follow), or 'follow_leader' (dynamic with shake and zoom)."
+        },
+        "follow_lerp": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.08,
+          "description": "Position smoothing factor per frame (0.0 = instant snap, 1.0 = camera never moves)."
+        },
+        "look_ahead": {
+          "type": "number",
+          "default": 2.0,
+          "description": "Meters ahead of the leader in the travel direction to offset the camera."
+        },
+        "shake_on_impact": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable camera shake on collision events."
+        },
+        "shake_intensity": {
+          "type": "number",
+          "minimum": 0.0,
+          "default": 0.3,
+          "description": "Maximum shake displacement in meters."
+        },
+        "shake_decay": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.85,
+          "description": "Per-frame shake decay multiplier (e.g. 0.85 halves shake in ~4 frames)."
+        },
+        "zoom": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.0,
+          "description": "Extra zoom multiplier on top of base scale (1.0 = no change)."
+        },
+        "finish_zoom": {
+          "type": "boolean",
+          "default": true,
+          "description": "Zoom in when a winner is decided."
+        },
+        "finish_zoom_factor": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 1.5,
+          "description": "Zoom multiplier applied on race complete."
+        },
+        "finish_zoom_lerp": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.04,
+          "description": "Per-frame smoothing factor for the finish zoom transition."
+        }
+      }
+    },
+
     "race": {
       "type": "object",
       "description": "Optional race-mode configuration. Presence enables race tracking and overlay.",

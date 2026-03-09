@@ -574,6 +574,7 @@ mod tests {
             end_condition,
             audio: SceneAudio::default(),
             race: Some(race_config),
+            camera: None,
         }
     }
 
@@ -595,6 +596,7 @@ mod tests {
             end_condition,
             audio: SceneAudio::default(),
             race: Some(race_config),
+            camera: None,
         }
     }
 
@@ -607,6 +609,7 @@ mod tests {
             end_condition: None,
             audio: SceneAudio::default(),
             race: None,
+            camera: None,
         }
     }
 

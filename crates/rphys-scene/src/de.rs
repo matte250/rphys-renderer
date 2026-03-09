@@ -25,6 +25,7 @@ pub(crate) struct RawScene {
     pub end_condition: Option<RawEndCondition>,
     pub audio: Option<RawSceneAudio>,
     pub race: Option<RawRaceConfig>,
+    pub camera: Option<RawCameraConfig>,
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
@@ -188,4 +189,22 @@ pub(crate) struct RawSceneAudio {
     pub default_bounce: Option<String>,
     pub default_destroy: Option<String>,
     pub master_volume: Option<f32>,
+}
+
+// ── Camera config ─────────────────────────────────────────────────────────────
+
+/// Raw camera configuration — mirrors the optional `camera:` YAML block.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawCameraConfig {
+    /// `"static"`, `"race"`, or `"follow_leader"`. Default: `"race"`.
+    pub mode: Option<String>,
+    pub follow_lerp: Option<f32>,
+    pub look_ahead: Option<f32>,
+    pub shake_on_impact: Option<bool>,
+    pub shake_intensity: Option<f32>,
+    pub shake_decay: Option<f32>,
+    pub zoom: Option<f32>,
+    pub finish_zoom: Option<bool>,
+    pub finish_zoom_factor: Option<f32>,
+    pub finish_zoom_lerp: Option<f32>,
 }
