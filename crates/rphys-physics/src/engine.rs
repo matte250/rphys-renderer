@@ -15,7 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::mpsc;
 
 use rapier2d::prelude::*;
-use rphys_scene::{BodyType, BoostConfig, Color, Destructible, EndCondition, Scene, ShapeKind};
+use rphys_scene::{
+    BodyType, BoostConfig, Color, Destructible, EndCondition, GravityWellConfig, Scene, ShapeKind,
+};
 
 use crate::types::{
     BodyId, BodyInfo, BodyState, CollisionInfo, CompletionReason, PhysicsConfig, PhysicsError,
@@ -37,6 +39,8 @@ struct StoredBody {
     body_type: rphys_scene::BodyType,
     /// Speed-boost configuration, if this body is a boost pad.
     boost: Option<BoostConfig>,
+    /// Gravity-well configuration, if this body acts as an attractor/repulsor.
+    gravity_well: Option<GravityWellConfig>,
 }
 
 // ── PhysicsEngine ─────────────────────────────────────────────────────────────
@@ -281,6 +285,7 @@ impl PhysicsEngine {
                 destructible: obj.destructible.clone(),
                 body_type: effective_body_type,
                 boost: obj.boost.clone(),
+                gravity_well: obj.gravity_well.clone(),
             },
         );
         self.body_info_map.insert(
@@ -412,6 +417,13 @@ impl PhysicsEngine {
         // the bodies remain in contact, giving continuous acceleration.
         output.extend(self.apply_boost_impulses());
 
+        // ── apply gravity-well attractor / repulsor forces ────────────────────
+        //
+        // For each body with a `GravityWellConfig`, exert a proximity-scaled
+        // force on every live dynamic body within the well's influence radius.
+        // Attractors pull toward the well; repulsors push away.
+        output.extend(self.apply_gravity_well_forces());
+
         // ── advance time ──────────────────────────────────────────────────────
         self.elapsed += self.config.timestep;
 
@@ -520,10 +532,99 @@ impl PhysicsEngine {
         Some((target_id, impulse_vec))
     }
 
+    /// Apply attractor/repulsor forces from every gravity-well body to all
+    /// live dynamic bodies within the well's influence radius.
+    ///
+    /// Two-phase design (mirrors [`apply_boost_impulses`]):
+    ///
+    /// - **Phase 1 (immutable):** iterate well bodies, look up their positions,
+    ///   and collect `(target_id, well_id, impulse_vec)` triples for every
+    ///   dynamic body within range.
+    /// - **Phase 2 (mutable):** apply `impulse * timestep` to each target rigid
+    ///   body and emit [`PhysicsEvent::GravityWellPull`].
+    fn apply_gravity_well_forces(&mut self) -> Vec<PhysicsEvent> {
+        // Phase 1 — collect pending impulses (immutable borrows only).
+        let mut pending: Vec<(BodyId, BodyId, Vec2)> = Vec::new();
+        let timestep = self.config.timestep;
+
+        // Collect well bodies with their positions up-front so the borrow
+        // on `body_data` and `rigid_body_set` is released before the mutable
+        // Phase 2 loop.
+        let wells: Vec<(BodyId, Vec2, GravityWellConfig)> = self
+            .body_data
+            .iter()
+            .filter_map(|(id, stored)| {
+                let well = stored.gravity_well.as_ref()?;
+                let handle = self.id_to_handle.get(id)?;
+                let rb = self.rigid_body_set.get(*handle)?;
+                let t = rb.translation();
+                Some((*id, Vec2::new(t.x, t.y), well.clone()))
+            })
+            .collect();
+
+        // For each well, inspect every live dynamic body.
+        for (well_id, well_pos, well_cfg) in &wells {
+            for (target_id, target_stored) in &self.body_data {
+                if *target_id == *well_id {
+                    continue; // a well cannot affect itself
+                }
+                if target_stored.body_type != BodyType::Dynamic {
+                    continue;
+                }
+                let Some(&target_handle) = self.id_to_handle.get(target_id) else {
+                    continue; // destroyed this step
+                };
+                let Some(target_rb) = self.rigid_body_set.get(target_handle) else {
+                    continue;
+                };
+
+                let t = target_rb.translation();
+                let target_pos = Vec2::new(t.x, t.y);
+                let delta = target_pos - *well_pos;
+                let dist = (delta.x * delta.x + delta.y * delta.y).sqrt();
+
+                // Skip bodies outside the influence radius or too close to
+                // the centre (avoids division-by-zero and extreme forces).
+                if dist >= well_cfg.radius || dist < 0.001 {
+                    continue;
+                }
+
+                // Attractor pulls toward well (negate direction); repulsor pushes away.
+                let unit_dir = delta / dist; // direction from well → target
+                let force_dir = if well_cfg.repulsor {
+                    unit_dir
+                } else {
+                    -unit_dir
+                };
+
+                // Force magnitude scales linearly with proximity.
+                let magnitude = well_cfg.strength * (1.0 - dist / well_cfg.radius);
+                let impulse_vec = force_dir * magnitude * timestep;
+
+                pending.push((*target_id, *well_id, impulse_vec));
+            }
+        }
+
+        // Phase 2 — apply impulses and emit events (mutable borrow of rigid_body_set).
+        let mut events = Vec::with_capacity(pending.len());
+        for (target_id, well_id, impulse_vec) in pending {
+            if let Some(&rb_handle) = self.id_to_handle.get(&target_id) {
+                if let Some(rb) = self.rigid_body_set.get_mut(rb_handle) {
+                    rb.apply_impulse(impulse_vec, true);
+                    events.push(PhysicsEvent::GravityWellPull {
+                        body: target_id,
+                        well_body: well_id,
+                    });
+                }
+            }
+        }
+        events
+    }
+
     /// Remove a body from the simulation and clean up all index entries.
     ///
     /// `body_data` is intentionally preserved for snapshot/reporting history.
-    fn remove_body(&mut self, body_id: BodyId) {
+    pub fn remove_body(&mut self, body_id: BodyId) {
         let Some(&rb_handle) = self.id_to_handle.get(&body_id) else {
             return;
         };
@@ -781,8 +882,8 @@ fn normalise_pair(a: BodyId, b: BodyId) -> (BodyId, BodyId) {
 mod tests {
     use super::*;
     use rphys_scene::{
-        Color, Environment, Material, SceneAudio, SceneMeta, ShapeKind, Vec2 as SvVec2, WallConfig,
-        WorldBounds,
+        Color, Environment, GravityWellConfig, Material, SceneAudio, SceneMeta, ShapeKind,
+        Vec2 as SvVec2, WallConfig, WorldBounds,
     };
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -1452,6 +1553,157 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, PhysicsEvent::BoostActivated { .. })),
             "boost should not activate on static-to-static contact"
+        );
+    }
+
+    // ── helpers for gravity-well tests ────────────────────────────────────────
+
+    /// Build a static body that acts as a gravity well at `pos`.
+    fn gravity_well_body(
+        pos: SvVec2,
+        radius: f32,
+        strength: f32,
+        repulsor: bool,
+    ) -> rphys_scene::SceneObject {
+        rphys_scene::SceneObject {
+            name: Some("well".to_string()),
+            shape: ShapeKind::Circle { radius: 0.3 },
+            position: pos,
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None,
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(255, 0, 255),
+            tags: vec!["well".to_string()],
+            destructible: None,
+            boost: None,
+            gravity_well: Some(GravityWellConfig {
+                radius,
+                strength,
+                repulsor,
+            }),
+            audio: rphys_scene::ObjectAudio::default(),
+        }
+    }
+
+    // ── test: attractor pulls dynamic ball toward well ─────────────────────────
+
+    /// A dynamic ball placed inside the influence radius of an attractor must
+    /// move closer to the well over time (x-position decreases toward well_x).
+    #[test]
+    fn test_gravity_well_attractor_pulls_ball() {
+        let well_x = 10.0_f32;
+        let ball_x = 12.5_f32; // 2.5 m to the right of the well
+
+        // No global gravity so horizontal motion is purely from the well.
+        let mut scene = minimal_scene(vec![
+            gravity_well_body(SvVec2::new(well_x, 17.5), 5.0, 80.0, false),
+            dynamic_ball(Some("ball"), SvVec2::new(ball_x, 17.5), SvVec2::ZERO),
+        ]);
+        scene.environment.gravity = SvVec2::new(0.0, 0.0);
+
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        engine.advance_to(0.5).unwrap();
+
+        let state = engine.state();
+        let ball = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("ball"))
+            .unwrap();
+
+        assert!(
+            ball.position.x < ball_x,
+            "attractor should pull ball left: started at {ball_x}, now at {}",
+            ball.position.x
+        );
+    }
+
+    // ── test: repulsor pushes dynamic ball away from well ─────────────────────
+
+    /// A dynamic ball placed inside the influence radius of a repulsor must
+    /// move further away from the well over time (x-position increases).
+    #[test]
+    fn test_gravity_well_repulsor_pushes_ball() {
+        let well_x = 10.0_f32;
+        let ball_x = 12.5_f32; // 2.5 m to the right of the well
+
+        let mut scene = minimal_scene(vec![
+            gravity_well_body(SvVec2::new(well_x, 17.5), 5.0, 80.0, true),
+            dynamic_ball(Some("ball"), SvVec2::new(ball_x, 17.5), SvVec2::ZERO),
+        ]);
+        scene.environment.gravity = SvVec2::new(0.0, 0.0);
+
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        engine.advance_to(0.5).unwrap();
+
+        let state = engine.state();
+        let ball = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("ball"))
+            .unwrap();
+
+        assert!(
+            ball.position.x > ball_x,
+            "repulsor should push ball right: started at {ball_x}, now at {}",
+            ball.position.x
+        );
+    }
+
+    // ── test: ball outside radius is unaffected ───────────────────────────────
+
+    /// A dynamic ball placed *outside* the well's influence radius must not
+    /// receive any horizontal impulse — its x-position stays constant
+    /// (no gravity in scene, so only well forces would move it laterally).
+    #[test]
+    fn test_gravity_well_no_effect_outside_radius() {
+        let ball_x = 17.0_f32; // well is at x=10, radius=5 → ball at 7 m away
+
+        let mut scene = minimal_scene(vec![
+            gravity_well_body(SvVec2::new(10.0, 17.5), 5.0, 80.0, false),
+            dynamic_ball(Some("ball"), SvVec2::new(ball_x, 17.5), SvVec2::ZERO),
+        ]);
+        scene.environment.gravity = SvVec2::new(0.0, 0.0);
+
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        engine.advance_to(0.5).unwrap();
+
+        let state = engine.state();
+        let ball = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("ball"))
+            .unwrap();
+
+        let delta_x = (ball.position.x - ball_x).abs();
+        assert!(
+            delta_x < 0.001,
+            "ball outside radius should not move in x: delta = {delta_x}"
+        );
+    }
+
+    // ── test: GravityWellPull event emitted when ball is in range ─────────────
+
+    /// When a dynamic ball is within the gravity well's influence radius,
+    /// at least one `PhysicsEvent::GravityWellPull` must be emitted.
+    #[test]
+    fn test_gravity_well_pull_event_emitted() {
+        let mut scene = minimal_scene(vec![
+            gravity_well_body(SvVec2::new(10.0, 17.5), 5.0, 30.0, false),
+            dynamic_ball(Some("ball"), SvVec2::new(12.0, 17.5), SvVec2::ZERO),
+        ]);
+        scene.environment.gravity = SvVec2::new(0.0, 0.0);
+
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        let events = engine.advance_to(0.1).unwrap();
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, PhysicsEvent::GravityWellPull { .. })),
+            "expected at least one GravityWellPull event for ball inside radius"
         );
     }
 }

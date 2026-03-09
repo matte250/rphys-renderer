@@ -23,12 +23,12 @@ use std::time::Instant;
 use rphys_audio::{AudioEvent, OfflineAudioMixer};
 use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
-use rphys_race::RaceTracker;
+use rphys_race::{RaceEvent, RaceTracker};
 use rphys_renderer::{
     CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, TinySkiaRenderer,
     TrailConfig, TrailRenderer,
 };
-use rphys_scene::{Scene, Vec2};
+use rphys_scene::{Color, Scene, Vec2};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -309,7 +309,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     };
     let mut camera = RaceCamera::new(camera_cfg, initial_ctx);
 
-    let overlay = OverlayRenderer::new();
+    let mut overlay = OverlayRenderer::new();
 
     // ── Spawn ffmpeg ───────────────────────────────────────────────────────
     let mut ffmpeg = spawn_ffmpeg_video_only(&options)?;
@@ -349,11 +349,26 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         );
         physics_time += dt;
 
-        let (physics_events, _race_events) = tracker.advance_to(physics_time)?;
+        let (physics_events, race_events) = tracker.advance_to(physics_time)?;
 
         // Collect audio events.
         for event in &physics_events {
             collect_audio_event(&mut audio, tracker.engine(), event, tracker.time(), scene);
+        }
+
+        // Arm the elimination banner for any eliminated racers this frame.
+        for event in &race_events {
+            if let RaceEvent::RacerEliminated { display_name, .. } = event {
+                // Look up the color from the current race state.
+                let color = tracker
+                    .race_state()
+                    .finished
+                    .iter()
+                    .find(|e| &e.display_name == display_name)
+                    .map(|e| e.color)
+                    .unwrap_or(Color::WHITE);
+                overlay.set_elimination_banner(display_name, color, tracker.time());
+            }
         }
 
         // Render frame with race camera (with trail ghosts).
@@ -654,6 +669,7 @@ fn collect_audio_event(
         }
         // Not audio-relevant events.
         PhysicsEvent::BoostActivated { .. } => {}
+        PhysicsEvent::GravityWellPull { .. } => {}
         PhysicsEvent::SimulationComplete { .. } => {}
     }
 }

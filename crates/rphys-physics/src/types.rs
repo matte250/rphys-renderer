@@ -95,6 +95,17 @@ pub enum PhysicsEvent {
         /// The dynamic body that received the boost impulse.
         body: BodyId,
     },
+    /// A dynamic body was within the influence radius of a gravity well and
+    /// received an attractive or repulsive force impulse this step.
+    ///
+    /// Emitted once per affected body per step. Useful for triggering
+    /// audio or visual feedback on bodies caught in a gravity well.
+    GravityWellPull {
+        /// The dynamic body that was pulled or pushed.
+        body: BodyId,
+        /// The body that carries the gravity-well configuration.
+        well_body: BodyId,
+    },
     /// An end condition was satisfied and the simulation is stopping.
     SimulationComplete {
         /// The reason the simulation ended.
