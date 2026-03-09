@@ -318,13 +318,37 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         .ok_or_else(|| ExportError::Io(std::io::Error::other("failed to open ffmpeg stdin")))?;
 
     // ── Main race loop ─────────────────────────────────────────────────────
+    // Slowdown config: when the leading racer enters the final stretch, physics
+    // advances at a fraction of normal speed, producing a slow-motion effect.
+    const SLOWDOWN_ZONE_M: f32 = 6.0; // metres above finish_y where slowdown kicks in
+    const SLOWDOWN_FACTOR: f32 = 0.25; // physics runs at 25% speed during slowdown
+
+    let finish_y = race_config.finish_y;
     let frame_dt = 1.0_f32 / options.fps as f32;
     let mut frame_count = 0u64;
+    let mut physics_time: f32 = 0.0; // accumulated physics time (NOT wall-clock frames)
 
     loop {
-        let target_time = (frame_count + 1) as f32 / options.fps as f32;
+        // Determine if the leader is in the slowdown zone.
+        let leader_y = tracker
+            .physics_state()
+            .bodies
+            .iter()
+            .filter(|b| b.is_alive && b.tags.iter().any(|t| t == &race_config.racer_tag))
+            .map(|b| b.position.y)
+            .reduce(f32::min)
+            .unwrap_or(f32::MAX);
 
-        let (physics_events, _race_events) = tracker.advance_to(target_time)?;
+        let dt = compute_slowdown_dt(
+            leader_y,
+            finish_y,
+            SLOWDOWN_ZONE_M,
+            SLOWDOWN_FACTOR,
+            frame_dt,
+        );
+        physics_time += dt;
+
+        let (physics_events, _race_events) = tracker.advance_to(physics_time)?;
 
         // Collect audio events.
         for event in &physics_events {
@@ -349,7 +373,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         // Exit when the race or physics is done, or safety cap reached.
         if tracker.is_race_complete()
             || tracker.is_physics_complete()
-            || target_time >= max_duration
+            || physics_time >= max_duration
         {
             break;
         }
@@ -629,6 +653,25 @@ fn collect_audio_event(
         // Not audio-relevant events.
         PhysicsEvent::BoostActivated { .. } => {}
         PhysicsEvent::SimulationComplete { .. } => {}
+    }
+}
+
+/// Compute the physics time delta for one rendered frame, applying a slowdown
+/// factor when the leading racer is within the final-stretch zone.
+///
+/// Returns `frame_dt * slowdown_factor` when `leader_y < finish_y + slowdown_zone_m`,
+/// otherwise returns the unmodified `frame_dt`.
+fn compute_slowdown_dt(
+    leader_y: f32,
+    finish_y: f32,
+    slowdown_zone_m: f32,
+    slowdown_factor: f32,
+    frame_dt: f32,
+) -> f32 {
+    if leader_y < finish_y + slowdown_zone_m {
+        frame_dt * slowdown_factor
+    } else {
+        frame_dt
     }
 }
 
@@ -1053,6 +1096,105 @@ mod tests {
             result.is_ok(),
             "race export with checkpoints failed: {:?}",
             result.err()
+        );
+    }
+
+    // ── Slowdown dt calculation unit test ─────────────────────────────────────
+
+    /// Verify `compute_slowdown_dt` returns the correct dt in and out of the zone.
+    ///
+    /// This test runs entirely in-process without needing ffmpeg.
+    #[test]
+    fn test_slowdown_activates_near_finish() {
+        let finish_y = 2.0_f32;
+        let zone_m = 6.0_f32;
+        let factor = 0.25_f32;
+        let frame_dt = 1.0_f32 / 60.0; // 60 fps
+
+        // Leader well above the slowdown zone → normal dt.
+        let dt_normal = compute_slowdown_dt(20.0, finish_y, zone_m, factor, frame_dt);
+        assert!(
+            (dt_normal - frame_dt).abs() < 1e-6,
+            "expected normal dt ({frame_dt}) when far from finish, got {dt_normal}"
+        );
+
+        // Leader exactly at the zone boundary (finish_y + zone_m) → normal dt.
+        // The condition is strictly less-than, so the boundary itself is NOT in the zone.
+        let boundary_y = finish_y + zone_m; // = 8.0
+        let dt_boundary = compute_slowdown_dt(boundary_y, finish_y, zone_m, factor, frame_dt);
+        assert!(
+            (dt_boundary - frame_dt).abs() < 1e-6,
+            "expected normal dt at boundary (y={boundary_y}), got {dt_boundary}"
+        );
+
+        // Leader just inside the slowdown zone → slowed dt.
+        let inside_y = finish_y + zone_m - 0.001; // 7.999, just inside
+        let dt_slow = compute_slowdown_dt(inside_y, finish_y, zone_m, factor, frame_dt);
+        let expected_slow = frame_dt * factor;
+        assert!(
+            (dt_slow - expected_slow).abs() < 1e-6,
+            "expected slowed dt ({expected_slow}) when leader at y={inside_y}, got {dt_slow}"
+        );
+
+        // Leader at finish_y (finished) → still in zone, slowed dt.
+        let dt_at_finish = compute_slowdown_dt(finish_y, finish_y, zone_m, factor, frame_dt);
+        assert!(
+            (dt_at_finish - expected_slow).abs() < 1e-6,
+            "expected slowed dt at finish line, got {dt_at_finish}"
+        );
+
+        // Leader below finish_y (past finish) → still in zone.
+        let dt_past = compute_slowdown_dt(finish_y - 1.0, finish_y, zone_m, factor, frame_dt);
+        assert!(
+            (dt_past - expected_slow).abs() < 1e-6,
+            "expected slowed dt when past finish line, got {dt_past}"
+        );
+
+        // Sanity: slowed dt is 25% of normal.
+        assert!(
+            (dt_slow / dt_normal - factor).abs() < 1e-5,
+            "slowed dt should be {factor}× normal dt"
+        );
+    }
+
+    // ── Full integration test with slowdown (requires ffmpeg) ─────────────────
+
+    /// Export a race with slowdown enabled; confirm the file is produced and
+    /// non-empty.  Skipped automatically when ffmpeg is not on PATH.
+    #[test]
+    fn test_full_race_export_with_slowdown_when_ffmpeg_available() {
+        if !ffmpeg_available() {
+            eprintln!("SKIP: ffmpeg not found on PATH");
+            return;
+        }
+
+        let scene = minimal_race_scene();
+        let tmp_dir = tempfile::tempdir().expect("tempdir");
+        let output = tmp_dir.path().join("test_race_slowdown.mp4");
+
+        // Allow enough wall-clock duration for the slowdown zone to be traversed.
+        let opts = ExportOptions {
+            preset: Preset::Custom,
+            width: 64,
+            height: 64,
+            fps: 10,
+            output_path: output.clone(),
+            max_duration: Some(2.0),
+            ffmpeg_path: None,
+        };
+
+        let result = export(&scene, opts);
+        assert!(
+            result.is_ok(),
+            "race export with slowdown failed: {:?}",
+            result.err()
+        );
+
+        let metadata = std::fs::metadata(&output).expect("output file should exist");
+        assert!(
+            metadata.len() > 0,
+            "output file should be non-empty (got {} bytes)",
+            metadata.len()
         );
     }
 }
