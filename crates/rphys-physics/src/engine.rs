@@ -35,6 +35,8 @@ struct StoredBody {
     color: Color,
     destructible: Option<Destructible>,
     body_type: rphys_scene::BodyType,
+    /// Speed-boost configuration, if this body is a boost pad.
+    boost: Option<rphys_scene::BoostConfig>,
 }
 
 // ── PhysicsEngine ─────────────────────────────────────────────────────────────
@@ -203,7 +205,19 @@ impl PhysicsEngine {
         obj: &rphys_scene::SceneObject,
     ) -> Result<BodyId, PhysicsError> {
         // ── rigid body ────────────────────────────────────────────────────────
-        let rb_builder = match obj.body_type {
+        //
+        // A Static body that specifies `angular_velocity` is promoted to
+        // `KinematicVelocityBased` so that rapier actually integrates its
+        // angular velocity each step.  A Fixed body ignores `angvel`; only
+        // kinematic (velocity-based) bodies respect it.
+        let effective_body_type =
+            if obj.body_type == BodyType::Static && obj.angular_velocity.is_some() {
+                BodyType::Kinematic
+            } else {
+                obj.body_type.clone()
+            };
+
+        let rb_builder = match effective_body_type {
             BodyType::Dynamic => RigidBodyBuilder::dynamic(),
             BodyType::Static => RigidBodyBuilder::fixed(),
             BodyType::Kinematic => RigidBodyBuilder::kinematic_velocity_based(),
@@ -265,7 +279,7 @@ impl PhysicsEngine {
                 shape: obj.shape.clone(),
                 color: obj.color,
                 destructible: obj.destructible.clone(),
-                body_type: obj.body_type.clone(),
+                body_type: effective_body_type,
             },
         );
         self.body_info_map.insert(
@@ -1064,5 +1078,113 @@ mod tests {
             audio: rphys_scene::ObjectAudio::default(),
         });
         assert!(PhysicsEngine::new(&scene, PhysicsConfig::default()).is_ok());
+    }
+
+    // ── test: static body with angular_velocity spins as kinematic ────────────
+
+    /// A body declared `static` but given an `angular_velocity` must be
+    /// promoted to `KinematicVelocityBased`.  After stepping, its rotation
+    /// must have changed and its `body_type` in the state snapshot must be
+    /// `Kinematic` (not `Static`).
+    #[test]
+    fn test_static_with_angular_velocity_becomes_kinematic() {
+        let spinner = rphys_scene::SceneObject {
+            name: Some("spinner".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 2.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 17.5),
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            // Declared static but has angular velocity → must become kinematic.
+            angular_velocity: Some(std::f32::consts::PI), // π rad/s
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(200, 0, 0),
+            tags: vec!["obstacle".to_string()],
+            destructible: None,
+            boost: None,
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        let scene = minimal_scene(vec![spinner]);
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+
+        // Advance one second — a fixed body would stay at 0 rad; a kinematic
+        // one should have rotated by ~π radians.
+        engine.advance_to(1.0).unwrap();
+
+        let state = engine.state();
+        let body = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("spinner"))
+            .unwrap();
+
+        // body_type must be reported as Kinematic, not Static.
+        assert_eq!(
+            body.body_type,
+            rphys_scene::BodyType::Kinematic,
+            "body promoted from Static should be reported as Kinematic"
+        );
+
+        // Rotation must have advanced (non-zero after 1 s at π rad/s).
+        assert!(
+            body.rotation.abs() > 0.1,
+            "spinner rotation should be non-zero after stepping, got {}",
+            body.rotation
+        );
+
+        // Body must still be alive (kinematic bodies are never destroyed by physics).
+        assert!(body.is_alive, "spinning kinematic body should remain alive");
+    }
+
+    // ── test: static body without angular_velocity stays fixed ───────────────
+
+    /// A body declared `static` with no `angular_velocity` must remain
+    /// `Fixed` (reported as `Static`) and must not move.
+    #[test]
+    fn test_static_without_angular_velocity_stays_fixed() {
+        let platform = rphys_scene::SceneObject {
+            name: Some("platform".to_string()),
+            shape: ShapeKind::Rectangle {
+                width: 4.0,
+                height: 0.2,
+            },
+            position: SvVec2::new(10.0, 17.5),
+            velocity: SvVec2::ZERO,
+            rotation: 0.0,
+            angular_velocity: None, // no spin → stays Fixed
+            body_type: rphys_scene::BodyType::Static,
+            material: Material::default(),
+            color: Color::rgb(100, 100, 100),
+            tags: Vec::new(),
+            destructible: None,
+            boost: None,
+            audio: rphys_scene::ObjectAudio::default(),
+        };
+
+        let scene = minimal_scene(vec![platform]);
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        engine.advance_to(1.0).unwrap();
+
+        let state = engine.state();
+        let body = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("platform"))
+            .unwrap();
+
+        assert_eq!(
+            body.body_type,
+            rphys_scene::BodyType::Static,
+            "static body without angular_velocity should remain Static"
+        );
+        assert!(
+            body.rotation.abs() < 1e-6,
+            "fixed body should not rotate, got {}",
+            body.rotation
+        );
     }
 }

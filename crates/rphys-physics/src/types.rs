@@ -87,6 +87,14 @@ pub enum PhysicsEvent {
         /// The body that was destroyed.
         body: BodyId,
     },
+    /// A dynamic body contacted a boost pad and received a speed impulse.
+    ///
+    /// Emitted once per step for each active boost contact. Useful for
+    /// triggering audio or visual feedback.
+    BoostActivated {
+        /// The dynamic body that received the boost impulse.
+        body: BodyId,
+    },
     /// An end condition was satisfied and the simulation is stopping.
     SimulationComplete {
         /// The reason the simulation ended.
