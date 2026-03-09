@@ -147,6 +147,22 @@ pub enum BodyType {
     Kinematic,
 }
 
+// ── Boost config ──────────────────────────────────────────────────────────────
+
+/// Configuration for a speed-boost platform.
+///
+/// When a dynamic body contacts an object with a `BoostConfig`, the physics
+/// engine applies an impulse in the specified direction to the dynamic body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoostConfig {
+    /// Unit vector (world space) indicating the impulse direction.
+    ///
+    /// For example, `[0.0, -1.0]` pushes downward.
+    pub direction: Vec2,
+    /// Magnitude of the impulse applied per contact frame (N·s).
+    pub impulse: f32,
+}
+
 // ── Destructible config ───────────────────────────────────────────────────────
 
 /// Configuration for a destructible object.
@@ -189,7 +205,12 @@ pub struct SceneObject {
     /// Initial rotation in **radians** (counter-clockwise positive).
     pub rotation: f32,
     /// Initial angular velocity in **rad/s**.
-    pub angular_velocity: f32,
+    ///
+    /// `None` means no angular velocity was specified (body does not spin).
+    /// `Some(0.0)` is an explicitly-set zero angular velocity.
+    /// The physics layer uses `Some(_)` to decide whether to promote a static
+    /// body to `KinematicVelocityBased` so that rapier drives its rotation.
+    pub angular_velocity: Option<f32>,
     /// Simulation mode (dynamic / static / kinematic).
     pub body_type: BodyType,
     /// Physical material properties.
@@ -200,6 +221,11 @@ pub struct SceneObject {
     pub tags: Vec<String>,
     /// If `Some`, the object can be destroyed by high-impulse collisions.
     pub destructible: Option<Destructible>,
+    /// If `Some`, this object acts as a speed-boost platform.
+    ///
+    /// The physics engine will apply the configured impulse to any dynamic body
+    /// that contacts this object.
+    pub boost: Option<BoostConfig>,
     /// Per-object sound overrides.
     pub audio: ObjectAudio,
 }

@@ -457,7 +457,7 @@ mod tests {
             position: Vec2::new(x, y),
             velocity: Vec2::ZERO,
             rotation: 0.0,
-            angular_velocity: 0.0,
+            angular_velocity: None,
             body_type: BodyType::Dynamic,
             material: Material {
                 restitution: 0.1,
@@ -467,6 +467,7 @@ mod tests {
             color,
             tags: vec!["racer".to_string()],
             destructible: None,
+            boost: None,
             audio: ObjectAudio::default(),
         }
     }
@@ -478,12 +479,13 @@ mod tests {
             position: Vec2::new(10.0, 20.0),
             velocity: Vec2::ZERO,
             rotation: 0.0,
-            angular_velocity: 0.0,
+            angular_velocity: None,
             body_type: BodyType::Dynamic,
             material: Material::default(),
             color: Color::WHITE,
             tags: vec!["spectator".to_string()],
             destructible: None,
+            boost: None,
             audio: ObjectAudio::default(),
         }
     }

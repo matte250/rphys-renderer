@@ -213,7 +213,7 @@ impl PhysicsEngine {
             .translation(Vec2::new(obj.position.x, obj.position.y))
             .rotation(obj.rotation)
             .linvel(Vec2::new(obj.velocity.x, obj.velocity.y))
-            .angvel(obj.angular_velocity)
+            .angvel(obj.angular_velocity.unwrap_or(0.0))
             .build();
 
         let rb_handle = self.rigid_body_set.insert(rb);
@@ -730,12 +730,13 @@ mod tests {
             position: pos,
             velocity: vel,
             rotation: 0.0,
-            angular_velocity: 0.0,
+            angular_velocity: None,
             body_type: rphys_scene::BodyType::Dynamic,
             material: Material::default(),
             color: Color::rgb(255, 0, 0),
             tags: Vec::new(),
             destructible: None,
+            boost: None,
             audio: rphys_scene::ObjectAudio::default(),
         }
     }
@@ -1053,12 +1054,13 @@ mod tests {
             position: SvVec2::new(10.0, 10.0),
             velocity: SvVec2::ZERO,
             rotation: 0.0,
-            angular_velocity: 0.0,
+            angular_velocity: None,
             body_type: rphys_scene::BodyType::Dynamic,
             material: Material::default(),
             color: Color::rgb(0, 255, 0),
             tags: Vec::new(),
             destructible: None,
+            boost: None,
             audio: rphys_scene::ObjectAudio::default(),
         });
         assert!(PhysicsEngine::new(&scene, PhysicsConfig::default()).is_ok());

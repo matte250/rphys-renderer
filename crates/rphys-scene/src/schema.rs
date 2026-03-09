@@ -203,6 +203,24 @@ static SCENE_SCHEMA: &str = r##"{
       }
     },
 
+    "BoostConfig": {
+      "type": "object",
+      "description": "Speed-boost configuration. When a dynamic body contacts this object, an impulse is applied in the given direction.",
+      "required": ["direction", "impulse"],
+      "additionalProperties": false,
+      "properties": {
+        "direction": {
+          "$ref": "#/definitions/Vec2",
+          "description": "Unit vector [x, y] (world space) indicating the impulse direction."
+        },
+        "impulse": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Impulse magnitude in N·s applied per contact frame."
+        }
+      }
+    },
+
     "ObjectAudio": {
       "type": "object",
       "description": "Per-object audio overrides.",
@@ -278,6 +296,7 @@ static SCENE_SCHEMA: &str = r##"{
           "description": "Labels for grouping and end conditions."
         },
         "destructible": { "$ref": "#/definitions/Destructible" },
+        "boost": { "$ref": "#/definitions/BoostConfig" },
         "audio": { "$ref": "#/definitions/ObjectAudio" }
       }
     },

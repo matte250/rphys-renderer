@@ -25,8 +25,7 @@ use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::RaceTracker;
 use rphys_renderer::{
-    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
-    TinySkiaRenderer,
+    CameraController, RaceCamera, RaceCameraConfig, RenderContext, Renderer, TinySkiaRenderer,
 };
 use rphys_scene::{Scene, Vec2};
 use tempfile::NamedTempFile;
@@ -692,12 +691,13 @@ mod tests {
                 position: Vec2::new(10.0, 10.0),
                 velocity: Vec2::ZERO,
                 rotation: 0.0,
-                angular_velocity: 0.0,
+                angular_velocity: None,
                 body_type: BodyType::Static,
                 material: Material::default(),
                 color: Color::rgba(255, 100, 50, 255),
                 tags: vec![],
                 destructible: None,
+                boost: None,
                 audio: ObjectAudio::default(),
             }],
             end_condition: Some(rphys_scene::EndCondition::TimeLimit { seconds: 1.0 }),
@@ -891,7 +891,7 @@ mod tests {
             position: Vec2::new(x, 3.5),
             velocity: Vec2::ZERO,
             rotation: 0.0,
-            angular_velocity: 0.0,
+            angular_velocity: None,
             body_type: BodyType::Dynamic,
             material: Material {
                 restitution: 0.1,
@@ -901,6 +901,7 @@ mod tests {
             color,
             tags: vec!["racer".to_string()],
             destructible: None,
+            boost: None,
             audio: ObjectAudio::default(),
         };
 

@@ -97,6 +97,7 @@ pub(crate) struct RawObject {
     pub color: Option<String>,
     pub tags: Option<Vec<String>>,
     pub destructible: Option<RawDestructible>,
+    pub boost: Option<RawBoostConfig>,
     pub audio: Option<RawObjectAudio>,
 }
 
@@ -110,6 +111,17 @@ pub(crate) struct RawMaterial {
 #[derive(Debug, Deserialize)]
 pub(crate) struct RawDestructible {
     pub min_impact_force: f32,
+}
+
+/// Raw boost configuration — mirrors the `boost:` YAML block on a scene object.
+///
+/// `direction` is a two-element `[x, y]` array; `impulse` is the N·s magnitude.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawBoostConfig {
+    /// Direction vector `[x, y]` (world space, should be a unit vector).
+    pub direction: [f32; 2],
+    /// Impulse magnitude in N·s applied per contact frame.
+    pub impulse: f32,
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,9 +12,9 @@ use crate::de::{
     RawWallConfig,
 };
 use crate::types::{
-    BodyType, Checkpoint, Color, Destructible, EndCondition, Environment, Material, ObjectAudio,
-    RaceConfig, Scene, SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2, WallConfig,
-    WorldBounds,
+    BodyType, BoostConfig, Checkpoint, Color, Destructible, EndCondition, Environment, Material,
+    ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta, SceneObject, ShapeKind, Vec2,
+    WallConfig, WorldBounds,
 };
 
 // ── Error types ───────────────────────────────────────────────────────────────
@@ -362,7 +362,10 @@ fn convert_object(
 
     // YAML stores degrees; internal representation is radians.
     let rotation = raw.rotation.map_or(0.0, |deg| deg.to_radians());
-    let angular_velocity = raw.angular_velocity.map_or(0.0, |deg_s| deg_s.to_radians());
+    // angular_velocity: None when unset (body does not spin).
+    // Some(deg_s) → Some(rad_s) so the physics layer can distinguish "unset"
+    // from "explicitly zero".
+    let angular_velocity = raw.angular_velocity.map(|deg_s| deg_s.to_radians());
 
     let body_type = match raw.body_type.as_deref() {
         None | Some("dynamic") => BodyType::Dynamic,
@@ -457,6 +460,23 @@ fn convert_object(
         }
     };
 
+    let boost = match &raw.boost {
+        None => None,
+        Some(rb) => {
+            if rb.impulse <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: display_name.clone(),
+                    message: format!("boost.impulse must be > 0, got {}", rb.impulse),
+                });
+                return None;
+            }
+            Some(BoostConfig {
+                direction: Vec2::new(rb.direction[0], rb.direction[1]),
+                impulse: rb.impulse,
+            })
+        }
+    };
+
     let audio = convert_object_audio(raw.audio.as_ref(), base_dir, errors);
 
     Some(SceneObject {
@@ -471,6 +491,7 @@ fn convert_object(
         color,
         tags,
         destructible,
+        boost,
         audio,
     })
 }
@@ -1037,6 +1058,65 @@ objects:
     }
 
     #[test]
+    fn test_angular_velocity_none_when_omitted() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "No Angular Velocity"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "still"
+    shape: circle
+    radius: 1.0
+    position: [10.0, 10.0]
+"##;
+        let scene = parse_scene(yaml).expect("should parse");
+        // angular_velocity omitted → None (body does not spin).
+        assert!(scene.objects[0].angular_velocity.is_none());
+    }
+
+    #[test]
+    fn test_angular_velocity_some_when_provided() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Angular Velocity Present"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "spinner"
+    shape: circle
+    radius: 1.0
+    position: [7.5, 36.0]
+    angular_velocity: 1.5
+    body_type: static
+"##;
+        let scene = parse_scene(yaml).expect("should parse spinning body");
+        let av = scene.objects[0]
+            .angular_velocity
+            .expect("angular_velocity should be Some");
+        // 1.5 deg/s → radians
+        assert!((av - 1.5_f32.to_radians()).abs() < 1e-6);
+    }
+
+    #[test]
     fn test_rotation_converted_to_radians() {
         let yaml = r##"
 version: "1"
@@ -1064,8 +1144,11 @@ objects:
         let obj = &scene.objects[0];
         // 90 degrees = π/2 radians
         assert!((obj.rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
-        // 180 degrees/s = π rad/s
-        assert!((obj.angular_velocity - std::f32::consts::PI).abs() < 1e-5);
+        // 180 degrees/s = π rad/s — stored as Some(π) because it was explicitly set.
+        let av = obj
+            .angular_velocity
+            .expect("angular_velocity should be Some");
+        assert!((av - std::f32::consts::PI).abs() < 1e-5);
     }
 
     #[test]
@@ -2346,6 +2429,141 @@ end_condition:
             scene.end_condition,
             Some(EndCondition::FirstToReach { .. })
         ));
+    }
+
+    // ── Boost config tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_boost_config() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Boost Test"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "pad"
+    shape: rectangle
+    size: [3.0, 0.15]
+    position: [7.5, 20.0]
+    body_type: static
+    color: "#00ffcc"
+    boost:
+      direction: [0.0, -1.0]
+      impulse: 8.0
+    tags: ["boost"]
+"##;
+        let scene = parse_scene(yaml).expect("should parse boost config");
+        let obj = &scene.objects[0];
+        let boost = obj.boost.as_ref().expect("boost should be Some");
+        assert!((boost.direction.x - 0.0).abs() < 1e-6);
+        assert!((boost.direction.y - (-1.0)).abs() < 1e-6);
+        assert!((boost.impulse - 8.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_boost_absent_gives_none() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "No Boost"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "plain"
+    shape: rectangle
+    size: [3.0, 0.15]
+    position: [7.5, 20.0]
+    body_type: static
+"##;
+        let scene = parse_scene(yaml).expect("should parse without boost");
+        assert!(scene.objects[0].boost.is_none());
+    }
+
+    #[test]
+    fn test_boost_impulse_must_be_positive() {
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Bad Boost"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "bad_pad"
+    shape: rectangle
+    size: [3.0, 0.15]
+    position: [7.5, 20.0]
+    boost:
+      direction: [0.0, -1.0]
+      impulse: -5.0
+"##;
+        let err = parse_scene(yaml).unwrap_err();
+        if let ParseError::Validation(errs) = err {
+            assert!(errs.iter().any(|e| matches!(
+                e,
+                ValidationError::InvalidValue { name, message }
+                    if name == "bad_pad" && message.contains("boost.impulse")
+            )));
+        } else {
+            panic!("expected Validation error, got {err:?}");
+        }
+    }
+
+    #[test]
+    fn test_boost_direction_stored_correctly() {
+        // Verify lateral boost direction (x-axis impulse).
+        let yaml = r##"
+version: "1"
+meta:
+  name: "Lateral Boost"
+environment:
+  gravity: [0.0, -9.81]
+  background_color: "#000000"
+  world_bounds:
+    width: 20.0
+    height: 35.0
+  walls:
+    visible: true
+    color: "#ffffff"
+    thickness: 0.3
+objects:
+  - name: "side_boost"
+    shape: rectangle
+    size: [0.15, 3.0]
+    position: [2.0, 15.0]
+    boost:
+      direction: [1.0, 0.0]
+      impulse: 12.5
+"##;
+        let scene = parse_scene(yaml).expect("should parse lateral boost");
+        let boost = scene.objects[0].boost.as_ref().unwrap();
+        assert!((boost.direction.x - 1.0).abs() < 1e-6);
+        assert!((boost.direction.y - 0.0).abs() < 1e-6);
+        assert!((boost.impulse - 12.5).abs() < 1e-6);
     }
 
     #[test]
