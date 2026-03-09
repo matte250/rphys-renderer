@@ -78,14 +78,36 @@ const SHADOW_COLOR: Color = Color {
     a: 200,
 };
 
+/// Duration a banner remains visible after being set (seconds).
+const BANNER_DURATION_SECS: f32 = 2.0;
+
+/// Font size for the elimination banner text.
+const BANNER_FONT_SIZE: f32 = 22.0;
+
+/// Background color for the elimination banner panel.
+const BANNER_BG: Color = Color {
+    r: 20,
+    g: 0,
+    b: 0,
+    a: 200,
+};
+
 // ── OverlayRenderer ───────────────────────────────────────────────────────────
 
 /// Draws race UI elements directly into a [`Frame`] buffer.
 ///
 /// Create once and reuse across frames. The embedded font is loaded once at
 /// construction time — there is no I/O involved.
+///
+/// Call [`set_elimination_banner`](Self::set_elimination_banner) whenever a
+/// [`RacerEliminated`](rphys_race::RaceEvent::RacerEliminated) event fires;
+/// the banner is automatically expired after 2 seconds of display time.
 pub struct OverlayRenderer {
     text: TextRenderer,
+    /// Active elimination banner: `(text, color, expires_at_seconds)`.
+    ///
+    /// `None` when no banner is pending.
+    pending_elimination_banner: Option<(String, Color, f32)>,
 }
 
 impl OverlayRenderer {
@@ -95,19 +117,32 @@ impl OverlayRenderer {
     pub fn new() -> Self {
         Self {
             text: TextRenderer::new(),
+            pending_elimination_banner: None,
         }
+    }
+
+    /// Arm the elimination banner for the named racer.
+    ///
+    /// The banner will be rendered for [`BANNER_DURATION_SECS`] seconds
+    /// starting from `current_time`.  Call this once per
+    /// [`RacerEliminated`](rphys_race::RaceEvent::RacerEliminated) event.
+    pub fn set_elimination_banner(&mut self, name: &str, color: Color, current_time: f32) {
+        let text = format!("❌ {} ELIMINATED!", name);
+        self.pending_elimination_banner = Some((text, color, current_time + BANNER_DURATION_SECS));
     }
 
     /// Draw the full race overlay for a normal (in-progress) frame.
     ///
-    /// Draws three layers onto `frame`:
+    /// Draws four layers onto `frame`:
     /// 1. Finish line — a gold dashed horizontal line at `race_config.finish_y`
     ///    in world space (may be off-screen if the camera hasn't reached it).
     /// 2. Checkpoint lines — translucent white lines at each checkpoint Y.
     /// 3. Rank leaderboard panel — top-right corner, dark semi-transparent
     ///    background, listing current standings with colored chips and names.
+    /// 4. Elimination banner — displayed for 2 s after a racer is eliminated,
+    ///    centered below the leaderboard in the eliminated racer's color.
     pub fn draw_race_frame(
-        &self,
+        &mut self,
         frame: &mut Frame,
         race_state: &RaceState,
         race_config: &RaceConfig,
@@ -122,6 +157,9 @@ impl OverlayRenderer {
 
         // ── Leaderboard panel ─────────────────────────────────────────────────
         self.draw_leaderboard(frame, race_state)?;
+
+        // ── Elimination banner ─────────────────────────────────────────────────
+        self.draw_elimination_banner(frame, race_state.elapsed_secs);
 
         Ok(())
     }
@@ -236,6 +274,60 @@ impl OverlayRenderer {
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /// Render the elimination banner if one is active and has not yet expired.
+    ///
+    /// Clears the banner once `current_time` passes the expiry timestamp.
+    /// The banner is rendered centered, just below the leaderboard panel.
+    fn draw_elimination_banner(&mut self, frame: &mut Frame, current_time: f32) {
+        let (text, color, expires_at) = match &self.pending_elimination_banner {
+            Some(b) => b.clone(),
+            None => return,
+        };
+
+        if current_time >= expires_at {
+            self.pending_elimination_banner = None;
+            return;
+        }
+
+        let fw = frame.width as i32;
+        let fh = frame.height as i32;
+
+        let (tw, th) = self.text.measure(&text, BANNER_FONT_SIZE);
+        let tw = tw as i32;
+        let th = th as i32;
+
+        // Position: below the leaderboard (which starts at PANEL_MARGIN and
+        // may be up to ~8 rows tall). Place it centered horizontally, and
+        // roughly 1/4 down from the top.
+        let banner_h = th + PANEL_PADDING * 2;
+        let banner_w = tw + PANEL_PADDING * 4;
+        let banner_x = ((fw - banner_w) / 2).max(0);
+        let banner_y = (fh / 4).min(fh - banner_h - PANEL_MARGIN);
+
+        if banner_y < 0 || banner_y + banner_h > fh {
+            return;
+        }
+
+        // Dark background.
+        fill_rect(frame, banner_x, banner_y, banner_w, banner_h, BANNER_BG);
+
+        // Shadow + foreground text.
+        let text_x = banner_x + PANEL_PADDING * 2;
+        let text_y = banner_y + PANEL_PADDING;
+
+        self.text.draw_text(
+            frame,
+            &text,
+            text_x + 1,
+            text_y + 1,
+            BANNER_FONT_SIZE,
+            SHADOW_COLOR,
+            0.85,
+        );
+        self.text
+            .draw_text(frame, &text, text_x, text_y, BANNER_FONT_SIZE, color, 1.0);
+    }
 
     /// Draw the finish line at the given world Y coordinate.
     fn draw_finish_line(&self, frame: &mut Frame, finish_y: f32, ctx: &RenderContext) {

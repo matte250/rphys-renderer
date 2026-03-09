@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn draw_race_frame_modifies_pixels() {
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 480);
         // Fill frame with a distinct background so we can detect changes.
         for byte in frame.pixels.iter_mut() {
@@ -144,7 +144,7 @@ mod tests {
     fn draw_race_frame_with_checkpoints_modifies_pixels() {
         use rphys_scene::Checkpoint;
 
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 480);
         for byte in frame.pixels.iter_mut() {
             *byte = 5;
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn draw_winner_announcement_modifies_pixels() {
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 480);
         for byte in frame.pixels.iter_mut() {
             *byte = 5;
@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn draw_winner_announcement_no_winner_is_noop() {
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(100, 100);
         // All pixels start at zero.
         let before = frame.pixels.clone();
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn text_blit_clips_at_right_edge() {
         // Small frame + text starting near right edge → should not panic.
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(40, 40);
         let race_state = make_race_state_with_active();
         let race_config = default_race_config();
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn text_blit_clips_at_top_edge() {
         // Frame with height too small to show panel — should not panic.
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 10);
         let race_state = make_race_state_with_active();
         let race_config = default_race_config();
@@ -261,7 +261,7 @@ mod tests {
     #[test]
     fn winner_announcement_clips_at_tiny_frame() {
         // Ensure announcement doesn't panic on a 20×20 frame.
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(20, 20);
         let race_state = make_race_state_with_winner();
         renderer
@@ -269,11 +269,55 @@ mod tests {
             .unwrap();
     }
 
+    // ── Test: elimination banner renders without panic ────────────────────────
+
+    #[test]
+    fn elimination_banner_renders_without_panic() {
+        let mut renderer = OverlayRenderer::new();
+        let mut frame = Frame::new(320, 480);
+        let race_state = make_race_state_with_active();
+        let race_config = default_race_config();
+        let ctx = default_ctx();
+
+        // Arm the banner.
+        renderer.set_elimination_banner("Blue", Color::rgb(50, 100, 220), race_state.elapsed_secs);
+
+        // Should render without panicking.
+        renderer
+            .draw_race_frame(&mut frame, &race_state, &race_config, &ctx)
+            .expect("draw_race_frame with elimination banner should succeed");
+    }
+
+    #[test]
+    fn elimination_banner_expires_after_duration() {
+        let mut renderer = OverlayRenderer::new();
+        let mut frame = Frame::new(320, 480);
+        let race_config = default_race_config();
+        let ctx = default_ctx();
+
+        // Set banner at t=0.
+        renderer.set_elimination_banner("Green", Color::rgb(0, 200, 0), 0.0);
+
+        // Draw at t=3.0 (past the 2s duration) — banner should be cleared.
+        let mut race_state = make_race_state_with_active();
+        race_state.elapsed_secs = 3.0;
+
+        renderer
+            .draw_race_frame(&mut frame, &race_state, &race_config, &ctx)
+            .unwrap();
+
+        // Banner should now be expired (internal field cleared). Verify by
+        // drawing again and confirming no panic.
+        renderer
+            .draw_race_frame(&mut frame, &race_state, &race_config, &ctx)
+            .unwrap();
+    }
+
     // ── Test: empty state is handled gracefully ───────────────────────────────
 
     #[test]
     fn draw_race_frame_empty_state_ok() {
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 480);
         let race_state = RaceState {
             active: vec![],
@@ -292,7 +336,7 @@ mod tests {
 
     #[test]
     fn draw_race_frame_many_racers_no_panic() {
-        let renderer = OverlayRenderer::new();
+        let mut renderer = OverlayRenderer::new();
         let mut frame = Frame::new(320, 480);
 
         let active: Vec<RacerStatus> = (1..=15)

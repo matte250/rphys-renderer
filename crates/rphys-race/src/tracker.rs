@@ -67,6 +67,16 @@ pub struct RaceTracker {
 
     /// `true` after a `SimulationComplete` event arrives from the engine.
     physics_complete: bool,
+
+    /// Time at which the next elimination check should fire.
+    ///
+    /// Set to `f32::MAX` when elimination mode is disabled (no
+    /// `elimination_interval_secs` in the race config).
+    next_elimination_time: f32,
+
+    /// Running count of eliminations that have occurred so far (1-based when
+    /// reported in events).
+    elimination_count: usize,
 }
 
 impl RaceTracker {
@@ -129,6 +139,9 @@ impl RaceTracker {
             elapsed_secs: 0.0,
         };
 
+        // Elimination mode: first check fires at t = interval (or never).
+        let next_elimination_time = race_config.elimination_interval_secs.unwrap_or(f32::MAX);
+
         Ok(Self {
             engine,
             race_config,
@@ -138,6 +151,8 @@ impl RaceTracker {
             previous_rankings: HashMap::new(),
             finished_ids: HashSet::new(),
             physics_complete: false,
+            next_elimination_time,
+            elimination_count: 0,
         })
     }
 
@@ -313,7 +328,61 @@ impl RaceTracker {
             }
         }
 
-        // ── 5. Rebuild active list from current state ────────────────────
+        // ── 5. Elimination round check ───────────────────────────────────
+        // Collect active body IDs (bodies that haven't finished yet).
+        let active_ids: Vec<BodyId> = racer_positions
+            .iter()
+            .filter(|(id, _)| !self.finished_ids.contains(id))
+            .map(|(id, _)| *id)
+            .collect();
+
+        if current_time >= self.next_elimination_time && active_ids.len() > 1 {
+            // Find last-place body: highest rank among active racers.
+            let last_place_id = active_ids
+                .iter()
+                .max_by_key(|id| new_rankings.get(id).copied().unwrap_or(0))
+                .copied();
+
+            if let Some(body_id) = last_place_id {
+                let rank_at_elimination = new_rankings.get(&body_id).copied().unwrap_or(0);
+
+                // Remove from physics engine.
+                self.engine.remove_body(body_id);
+
+                // Track as finished so it leaves the active list.
+                self.finished_ids.insert(body_id);
+
+                // Add to finished list (they place last among remaining).
+                let finish_rank = self.finished_ids.len();
+                let meta = &self.racer_meta[&body_id];
+                let eliminated_name = meta.display_name.clone();
+                let eliminated_color = meta.color;
+                self.race_state.finished.push(FinishedEntry {
+                    body_id,
+                    display_name: eliminated_name.clone(),
+                    color: eliminated_color,
+                    finish_rank,
+                    finish_time_secs: current_time,
+                });
+
+                self.elimination_count += 1;
+                let elimination_number = self.elimination_count;
+
+                race_events.push(RaceEvent::RacerEliminated {
+                    body_id,
+                    display_name: eliminated_name,
+                    rank_at_elimination,
+                    elimination_number,
+                });
+
+                // Advance timer for the next round.
+                if let Some(interval) = self.race_config.elimination_interval_secs {
+                    self.next_elimination_time += interval;
+                }
+            }
+        }
+
+        // ── 6. Rebuild active list from current state ────────────────────
         self.race_state.active = build_active_list(
             &phys_state,
             &self.racer_meta,
@@ -501,6 +570,27 @@ mod tests {
             version: "1".to_string(),
             meta: default_meta(),
             environment: default_env(),
+            objects,
+            end_condition,
+            audio: SceneAudio::default(),
+            race: Some(race_config),
+        }
+    }
+
+    /// Build a race scene with **zero gravity** so balls stay put for timing
+    /// tests (e.g. elimination interval checks that need balls alive for 3–5 s).
+    fn make_race_scene_zero_gravity(
+        objects: Vec<SceneObject>,
+        race_config: RaceConfig,
+        end_condition: Option<EndCondition>,
+    ) -> Scene {
+        Scene {
+            version: "1".to_string(),
+            meta: default_meta(),
+            environment: Environment {
+                gravity: Vec2::new(0.0, 0.0),
+                ..default_env()
+            },
             objects,
             end_condition,
             audio: SceneAudio::default(),
@@ -864,6 +954,221 @@ mod tests {
                 "finished racer should be in finished list"
             );
         }
+    }
+
+    // ── Elimination test helper ───────────────────────────────────────────────
+    //
+    // Uses finish_y = -100.0 so balls bounce off the floor wall and never
+    // cross the finish line.  Elimination drives the race instead.
+    fn elimination_race_config(interval_secs: f32) -> RaceConfig {
+        RaceConfig {
+            finish_y: -100.0,
+            racer_tag: "racer".to_string(),
+            announcement_hold_secs: 2.0,
+            checkpoints: Vec::new(),
+            elimination_interval_secs: Some(interval_secs),
+        }
+    }
+
+    // ── test: elimination — last-place removed after interval ─────────────────
+
+    #[test]
+    fn test_elimination_last_place_removed_after_interval() {
+        // Three racers; elimination every 3 seconds.
+        // Place them at different heights so ranks are deterministic.
+        // Zero gravity keeps balls alive past the 3s elimination window.
+        let red = race_ball("Red", 5.0, 35.0, Color::rgb(255, 0, 0));
+        let blue = race_ball("Blue", 10.0, 30.0, Color::rgb(0, 0, 255));
+        let green = race_ball("Green", 15.0, 25.0, Color::rgb(0, 200, 0));
+
+        let scene = make_race_scene_zero_gravity(
+            vec![red, blue, green],
+            RaceConfig {
+                finish_y: 2.0,
+                racer_tag: "racer".to_string(),
+                announcement_hold_secs: 2.0,
+                checkpoints: Vec::new(),
+                elimination_interval_secs: Some(3.0),
+            },
+            Some(EndCondition::TimeLimit { seconds: 20.0 }),
+        );
+
+        let mut tracker = RaceTracker::new(&scene, export_config()).unwrap();
+
+        let mut eliminated_events: Vec<RaceEvent> = Vec::new();
+
+        // Run past the first 3-second elimination window.
+        let mut iters = 0;
+        while tracker.time() < 3.5 && !tracker.is_physics_complete() && iters < 100_000 {
+            let (_, race_events) = tracker.step().unwrap();
+            for event in race_events {
+                if matches!(event, RaceEvent::RacerEliminated { .. }) {
+                    eliminated_events.push(event);
+                }
+            }
+            iters += 1;
+        }
+
+        assert!(
+            !eliminated_events.is_empty(),
+            "expected at least one RacerEliminated event after 3 s, got none after {iters} steps"
+        );
+
+        // After elimination, active count should be 2.
+        let active_count = tracker.race_state().active.len();
+        let finished_count = tracker.race_state().finished.len();
+        assert!(
+            active_count <= 2,
+            "expected ≤2 active racers after elimination, got {active_count}"
+        );
+        assert!(
+            finished_count >= 1,
+            "expected ≥1 in finished list after elimination, got {finished_count}"
+        );
+    }
+
+    // ── test: eliminated racer moves from active to finished ─────────────────
+
+    #[test]
+    fn test_eliminated_racer_moves_to_finished() {
+        // Zero gravity keeps balls alive past the 3s elimination window.
+        let red = race_ball("Red", 5.0, 35.0, Color::rgb(255, 0, 0));
+        let blue = race_ball("Blue", 10.0, 25.0, Color::rgb(0, 0, 255));
+
+        let scene = make_race_scene_zero_gravity(
+            vec![red, blue],
+            RaceConfig {
+                finish_y: 2.0,
+                racer_tag: "racer".to_string(),
+                announcement_hold_secs: 2.0,
+                checkpoints: Vec::new(),
+                elimination_interval_secs: Some(3.0),
+            },
+            Some(EndCondition::TimeLimit { seconds: 20.0 }),
+        );
+
+        let mut tracker = RaceTracker::new(&scene, export_config()).unwrap();
+
+        // Both start as active.
+        assert_eq!(
+            tracker.race_state().active.len(),
+            2,
+            "should start with 2 active racers"
+        );
+        assert_eq!(
+            tracker.race_state().finished.len(),
+            0,
+            "should start with 0 finished"
+        );
+
+        // Advance past first elimination.
+        let mut eliminated = false;
+        let mut iters = 0;
+        while tracker.time() < 4.0 && !tracker.is_physics_complete() && iters < 200_000 {
+            let (_, race_events) = tracker.step().unwrap();
+            for event in &race_events {
+                if matches!(event, RaceEvent::RacerEliminated { .. }) {
+                    eliminated = true;
+                }
+            }
+            iters += 1;
+        }
+
+        assert!(eliminated, "expected an elimination to occur");
+
+        // After elimination: 1 active, 1 finished (as long as no one crossed the line).
+        let state = tracker.race_state();
+        assert!(
+            state.finished.len() >= 1,
+            "eliminated racer should be in finished list"
+        );
+        // Total tracked should still be 2.
+        assert_eq!(
+            state.active.len() + state.finished.len(),
+            2,
+            "total racers (active + finished) should still equal 2"
+        );
+    }
+
+    // ── test: no elimination when only 1 racer remains ───────────────────────
+
+    #[test]
+    fn test_no_elimination_with_single_racer() {
+        // Single racer — elimination should never fire (guard: active.len() > 1).
+        let solo = race_ball("Solo", 10.0, 25.0, Color::rgb(200, 100, 0));
+
+        let scene = make_race_scene(
+            vec![solo],
+            elimination_race_config(1.0),
+            Some(EndCondition::TimeLimit { seconds: 5.0 }),
+        );
+
+        let mut tracker = RaceTracker::new(&scene, export_config()).unwrap();
+
+        let mut eliminated_events: Vec<RaceEvent> = Vec::new();
+        let mut iters = 0;
+        while tracker.time() < 5.0 && !tracker.is_physics_complete() && iters < 500_000 {
+            let (_, race_events) = tracker.step().unwrap();
+            for event in race_events {
+                if matches!(event, RaceEvent::RacerEliminated { .. }) {
+                    eliminated_events.push(event);
+                }
+            }
+            iters += 1;
+        }
+
+        assert!(
+            eliminated_events.is_empty(),
+            "should never eliminate when only 1 racer remains, but got {} events",
+            eliminated_events.len()
+        );
+    }
+
+    // ── test: next_elimination_time advances after each round ────────────────
+
+    #[test]
+    fn test_next_elimination_time_advances() {
+        // Use 4 racers and a 2s interval so two eliminations can occur.
+        // finish_y = -100 so no one crosses the finish line.
+        let red = race_ball("Red", 3.0, 38.0, Color::rgb(255, 0, 0));
+        let blue = race_ball("Blue", 7.0, 30.0, Color::rgb(0, 0, 255));
+        let green = race_ball("Green", 11.0, 20.0, Color::rgb(0, 200, 0));
+        let yellow = race_ball("Yellow", 15.0, 10.0, Color::rgb(255, 220, 0));
+
+        let scene = make_race_scene(
+            vec![red, blue, green, yellow],
+            elimination_race_config(2.0),
+            Some(EndCondition::TimeLimit { seconds: 30.0 }),
+        );
+
+        let mut tracker = RaceTracker::new(&scene, export_config()).unwrap();
+
+        let mut elimination_count = 0usize;
+        let mut iters = 0;
+
+        // Run past two elimination windows.
+        while tracker.time() < 5.0 && !tracker.is_physics_complete() && iters < 500_000 {
+            let (_, race_events) = tracker.step().unwrap();
+            for event in &race_events {
+                if let RaceEvent::RacerEliminated {
+                    elimination_number, ..
+                } = event
+                {
+                    elimination_count += 1;
+                    assert_eq!(
+                        *elimination_number, elimination_count,
+                        "elimination_number should be 1-based and match count"
+                    );
+                }
+            }
+            iters += 1;
+        }
+
+        // At least 2 eliminations (at ~2s and ~4s).
+        assert!(
+            elimination_count >= 2,
+            "expected ≥2 eliminations with 2s interval over 5s, got {elimination_count}"
+        );
     }
 
     // ── test: is_physics_complete reflects engine state ───────────────────────

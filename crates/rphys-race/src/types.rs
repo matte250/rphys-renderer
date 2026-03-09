@@ -131,6 +131,18 @@ pub enum RaceEvent {
         /// Information about the winner.
         winner: WinnerInfo,
     },
+
+    /// A racer was eliminated for finishing last at an elimination interval.
+    RacerEliminated {
+        /// The body that was eliminated.
+        body_id: BodyId,
+        /// The racer's display name.
+        display_name: String,
+        /// Their rank among active racers at the moment of elimination.
+        rank_at_elimination: usize,
+        /// 1-based counter: which elimination round this was (1 = first, 2 = second, …).
+        elimination_number: usize,
+    },
 }
 
 // ── Error type ────────────────────────────────────────────────────────────────
