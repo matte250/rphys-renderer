@@ -15,6 +15,7 @@
 //! export(&scene, options).expect("export failed");
 //! ```
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -22,6 +23,7 @@ use std::time::Instant;
 
 use rphys_audio::{AudioEvent, OfflineAudioMixer};
 use rphys_overlay::OverlayRenderer;
+use rphys_physics::types::BodyId;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
 use rphys_race::{CountdownState, RaceEvent, RaceTracker};
 use rphys_renderer::{
@@ -231,6 +233,9 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
     let _export_start = Instant::now();
     let mut frame_count = 0u64;
     let frame_dt = 1.0_f32 / options.fps as f32;
+    let mut boost_cooldowns: HashMap<BodyId, f32> = HashMap::new();
+    // Static camera: center of the world bounds.
+    let camera_y = scene.environment.world_bounds.height / 2.0;
 
     loop {
         let target_time = (frame_count + 1) as f32 / options.fps as f32;
@@ -238,7 +243,15 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
 
         // Collect audio events.
         for event in &events {
-            collect_audio_event(&mut audio, &engine, event, engine.time(), scene);
+            collect_audio_event(
+                &mut audio,
+                &engine,
+                event,
+                engine.time(),
+                scene,
+                &mut boost_cooldowns,
+                camera_y,
+            );
         }
 
         // Render.
@@ -399,6 +412,9 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     let frame_dt = 1.0_f32 / options.fps as f32;
     let mut frame_count = 0u64;
     let mut physics_time: f32 = 0.0; // accumulated physics time (NOT wall-clock frames)
+    let mut boost_cooldowns: HashMap<BodyId, f32> = HashMap::new();
+    // Camera Y for spatial audio — initialised to world center, updated each frame.
+    let mut camera_y = world.height / 2.0;
 
     // Set to `Some(deadline)` when the first racer finishes.
     // The export loop runs until `physics_time >= deadline`.
@@ -470,7 +486,15 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
 
         // Collect audio events.
         for event in &physics_events {
-            collect_audio_event(&mut audio, tracker.engine(), event, tracker.time(), scene);
+            collect_audio_event(
+                &mut audio,
+                tracker.engine(),
+                event,
+                tracker.time(),
+                scene,
+                &mut boost_cooldowns,
+                camera_y,
+            );
         }
 
         // Arm the elimination banner for any eliminated racers this frame.
@@ -491,7 +515,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             if let RaceEvent::RacerFinished { .. } = event {
                 if let Some(path) = scene.audio.default_finish.clone() {
                     audio.add_event(AudioEvent {
-                        timestamp_secs: tracker.time(),
+                        timestamp_secs: tracker.time() + 0.2,
                         path,
                         volume: 1.0,
                     });
@@ -517,6 +541,9 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             leader_pos,
             race_complete,
         );
+
+        // Update camera_y for spatial audio from the current frame's camera.
+        camera_y = ctx.camera_origin.y + (options.height as f32 / ctx.scale / 2.0);
 
         // VFX: build body snapshot (world coords), feed all events, tick.
         if let Some(ref mut vfx) = vfx_engine {
@@ -818,19 +845,40 @@ fn has_any_audio(scene: &Scene) -> bool {
             .any(|o| o.audio.bounce.is_some() || o.audio.destroy.is_some())
 }
 
+/// Apply distance-based volume attenuation relative to the camera.
+///
+/// Bodies closer to `camera_y` are louder; bodies farther away are quieter,
+/// with a floor of 0.1 so off-screen sounds remain faintly audible.
+fn spatial_attenuation(body_y: f32, camera_y: f32) -> f32 {
+    const MAX_AUDIBLE_DISTANCE: f32 = 20.0;
+    let distance = (body_y - camera_y).abs();
+    (1.0 - distance / MAX_AUDIBLE_DISTANCE).max(0.1)
+}
+
 /// Translate a [`PhysicsEvent`] into zero or more [`AudioEvent`]s and queue them.
+///
+/// `boost_cooldowns` prevents the same body from triggering the boost sound
+/// more than once per 0.3 s window. `camera_y` is used for spatial attenuation.
 fn collect_audio_event(
     audio: &mut OfflineAudioMixer,
     engine: &PhysicsEngine,
     event: &PhysicsEvent,
     current_time: f32,
     scene: &Scene,
+    boost_cooldowns: &mut HashMap<BodyId, f32>,
+    camera_y: f32,
 ) {
     const MAX_IMPULSE: f32 = 100.0;
+    const BOOST_COOLDOWN_SECS: f32 = 0.3;
 
     match event {
         PhysicsEvent::Collision(info) => {
             let volume = volume_from_impulse(info.impulse, MAX_IMPULSE);
+            let body_y = engine
+                .body_position(info.body_a)
+                .map(|p| p.y)
+                .unwrap_or(camera_y);
+            let volume = volume * spatial_attenuation(body_y, camera_y);
             // Try body_a's bounce sound, fall back to scene default.
             let path = engine
                 .body_info(info.body_a)
@@ -847,6 +895,8 @@ fn collect_audio_event(
         }
         PhysicsEvent::WallBounce { body, impulse } => {
             let volume = volume_from_impulse(*impulse, MAX_IMPULSE);
+            let body_y = engine.body_position(*body).map(|p| p.y).unwrap_or(camera_y);
+            let volume = volume * spatial_attenuation(body_y, camera_y);
             let path = engine
                 .body_info(*body)
                 .and_then(|bi| bi.audio.bounce.clone())
@@ -861,6 +911,8 @@ fn collect_audio_event(
             }
         }
         PhysicsEvent::Destroyed { body } => {
+            let body_y = engine.body_position(*body).map(|p| p.y).unwrap_or(camera_y);
+            let volume = spatial_attenuation(body_y, camera_y);
             let path = engine
                 .body_info(*body)
                 .and_then(|bi| bi.audio.destroy.clone())
@@ -870,24 +922,39 @@ fn collect_audio_event(
                 audio.add_event(AudioEvent {
                     timestamp_secs: current_time,
                     path,
-                    volume: 1.0,
+                    volume,
                 });
             }
         }
-        PhysicsEvent::BoostActivated { .. } => {
-            // Fixed volume — boost impulses are uniform by design.
+        PhysicsEvent::BoostActivated { body } => {
+            // Per-body cooldown: skip if this body triggered boost within 0.3 s.
+            let last = boost_cooldowns
+                .get(body)
+                .copied()
+                .unwrap_or(f32::NEG_INFINITY);
+            if current_time - last < BOOST_COOLDOWN_SECS {
+                return;
+            }
+            boost_cooldowns.insert(*body, current_time);
+
+            let body_y = engine.body_position(*body).map(|p| p.y).unwrap_or(camera_y);
+            let volume = 0.7 * spatial_attenuation(body_y, camera_y);
             if let Some(path) = scene.audio.default_boost.clone() {
                 audio.add_event(AudioEvent {
                     timestamp_secs: current_time,
                     path,
-                    volume: 0.7,
+                    volume,
                 });
             }
         }
         PhysicsEvent::BumperActivated {
-            impulse_magnitude, ..
+            body,
+            impulse_magnitude,
+            ..
         } => {
             let volume = volume_from_impulse(*impulse_magnitude, MAX_IMPULSE);
+            let body_y = engine.body_position(*body).map(|p| p.y).unwrap_or(camera_y);
+            let volume = volume * spatial_attenuation(body_y, camera_y);
             if let Some(path) = scene.audio.default_bumper.clone() {
                 audio.add_event(AudioEvent {
                     timestamp_secs: current_time,
@@ -1670,6 +1737,7 @@ mod tests {
         };
         let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
         let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+        let mut cooldowns = HashMap::new();
 
         collect_audio_event(
             &mut mixer,
@@ -1681,6 +1749,8 @@ mod tests {
             },
             1.0,
             &scene,
+            &mut cooldowns,
+            0.0, // camera_y — body position falls back to this, so attenuation = 1.0
         );
 
         let events = mixer.events();
@@ -1713,6 +1783,7 @@ mod tests {
         };
         let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
         let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+        let mut cooldowns = HashMap::new();
 
         collect_audio_event(
             &mut mixer,
@@ -1722,6 +1793,8 @@ mod tests {
             },
             2.5,
             &scene,
+            &mut cooldowns,
+            0.0,
         );
 
         let events = mixer.events();
@@ -1757,6 +1830,7 @@ mod tests {
         };
         let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
         let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+        let mut cooldowns = HashMap::new();
 
         collect_audio_event(
             &mut mixer,
@@ -1768,6 +1842,8 @@ mod tests {
             },
             0.0,
             &scene,
+            &mut cooldowns,
+            0.0,
         );
         collect_audio_event(
             &mut mixer,
@@ -1775,6 +1851,8 @@ mod tests {
             &PhysicsEvent::BoostActivated { body: BodyId(1) },
             0.0,
             &scene,
+            &mut cooldowns,
+            0.0,
         );
 
         assert!(
@@ -1819,5 +1897,74 @@ mod tests {
             has_any_audio(&scene),
             "expected true when default_finish is set"
         );
+    }
+
+    /// Boost cooldown: a second BoostActivated within 0.3 s is suppressed.
+    #[test]
+    fn test_boost_cooldown_suppresses_rapid_fire() {
+        use rphys_physics::types::BodyId;
+
+        let scene = scene_with_sfx_audio();
+        let physics_cfg = PhysicsConfig {
+            max_steps_per_call: u32::MAX,
+            ..PhysicsConfig::default()
+        };
+        let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
+        let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+        let mut cooldowns = HashMap::new();
+        let body = BodyId(42);
+
+        // First boost at t=1.0 — should emit.
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BoostActivated { body },
+            1.0,
+            &scene,
+            &mut cooldowns,
+            0.0,
+        );
+        assert_eq!(mixer.events().len(), 1, "first boost should emit");
+
+        // Second boost at t=1.1 (within 0.3 s) — should be suppressed.
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BoostActivated { body },
+            1.1,
+            &scene,
+            &mut cooldowns,
+            0.0,
+        );
+        assert_eq!(
+            mixer.events().len(),
+            1,
+            "second boost within cooldown should be suppressed"
+        );
+
+        // Third boost at t=1.4 (after 0.3 s cooldown) — should emit.
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BoostActivated { body },
+            1.4,
+            &scene,
+            &mut cooldowns,
+            0.0,
+        );
+        assert_eq!(mixer.events().len(), 2, "boost after cooldown should emit");
+    }
+
+    /// Spatial attenuation: body at camera_y has full volume, body far away is quieter.
+    #[test]
+    fn test_spatial_attenuation_scales_volume() {
+        // Body at camera position → attenuation = 1.0
+        assert!((spatial_attenuation(5.0, 5.0) - 1.0).abs() < 1e-5);
+
+        // Body 10 units away → attenuation = 0.5
+        assert!((spatial_attenuation(15.0, 5.0) - 0.5).abs() < 1e-5);
+
+        // Body 20+ units away → attenuation clamped to 0.1
+        assert!((spatial_attenuation(30.0, 5.0) - 0.1).abs() < 1e-5);
     }
 }

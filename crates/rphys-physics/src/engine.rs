@@ -983,6 +983,16 @@ impl PhysicsEngine {
     pub fn body_info(&self, id: BodyId) -> Option<&BodyInfo> {
         self.body_info_map.get(&id)
     }
+
+    /// Return the current world-space position of a live body.
+    ///
+    /// Returns `None` if the body has been destroyed or was never created.
+    pub fn body_position(&self, id: BodyId) -> Option<rphys_scene::Vec2> {
+        let handle = self.id_to_handle.get(&id)?;
+        let rb = self.rigid_body_set.get(*handle)?;
+        let t = rb.translation();
+        Some(rphys_scene::Vec2::new(t.x, t.y))
+    }
 }
 
 // ── Free helpers ──────────────────────────────────────────────────────────────
