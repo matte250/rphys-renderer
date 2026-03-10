@@ -2,32 +2,34 @@ version: "1"
 
 meta:
   name: "Marble Race"
-  description: "Five marble balls race down a zigzag course to the finish line"
+  description: "Five marble balls race down an angled zigzag course"
   author: "rphys"
-  duration_hint: 15.0
+  duration_hint: 30.0
 
 environment:
   gravity: [0.0, -9.81]
   background_color: "#12102a"
   world_bounds:
     width: 15.0
-    height: 27.0
+    height: 54.0
   walls:
     visible: true
-    color: "#4a4a7a"
-    thickness: 0.3
+    color: "#9090cc"
+    thickness: 0.4
     open_bottom: true
 
 race:
   finish_y: 2.0
   racer_tag: "racer"
   announcement_hold_secs: 2.0
+  elimination_interval_secs: 8.0
+  post_finish_secs: 1.0
   checkpoints:
-    - y: 19.0
+    - y: 40.0
       label: "Checkpoint 1"
-    - y: 13.0
+    - y: 26.0
       label: "Halfway"
-    - y: 6.5
+    - y: 12.0
       label: "Final Stretch"
 
 audio:
@@ -45,19 +47,59 @@ end_condition:
       finish_y: 2.0
       tag: "racer"
     - type: time_limit
-      seconds: 15.0
+      seconds: 30.0
+
+camera:
+  mode: follow_leader
+  follow_lerp: 0.04
+  look_ahead: 3.0
+  lock_horizontal: true
+  shake_on_impact: true
+  shake_intensity: 0.08
+  shake_decay: 0.90
+  zoom: 1.0
+  finish_zoom: true
+  finish_zoom_factor: 1.6
+  finish_zoom_lerp: 0.03
+
+vfx:
+  max_particles: 600
+  impact_sparks:
+    enabled: true
+    count: 10
+    lifetime_secs: 0.30
+    size_px: 2.0
+    speed: 220.0
+  boost_flash:
+    enabled: true
+    color: "#FFD700"
+    radius_px: 10.0
+    duration_secs: 0.35
+  elimination_burst:
+    enabled: true
+    count: 35
+    lifetime_secs: 0.7
+    size_px: 3.0
+    speed: 280.0
+  winner_pop:
+    enabled: true
+    count: 80
+    lifetime_secs: 1.5
+    size_px: 4.0
+    speed: 320.0
+    spread_deg: 180.0
 
 objects:
-  # ── Marble racers ────────────────────────────────────────────────────────────
+  # ── Marble racers — spread across the top ───────────────────────────────────
 
   - name: "Red"
     shape: circle
     radius: 0.45
-    position: [3.0, 25.5]
-    velocity: [0.5, 0.0]
+    position: [3.0, 50.5]
+    velocity: [0.2, 0.0]
     material:
-      restitution: 0.35
-      friction: 0.25
+      restitution: 0.3
+      friction: 0.2
       density: 1.2
     color: "#e94560"
     tags: ["racer"]
@@ -65,11 +107,11 @@ objects:
   - name: "Blue"
     shape: circle
     radius: 0.45
-    position: [5.5, 25.5]
-    velocity: [-0.4, 0.0]
+    position: [5.5, 51.5]
+    velocity: [-0.2, 0.0]
     material:
-      restitution: 0.35
-      friction: 0.25
+      restitution: 0.3
+      friction: 0.2
       density: 1.2
     color: "#4488ff"
     tags: ["racer"]
@@ -77,11 +119,11 @@ objects:
   - name: "Green"
     shape: circle
     radius: 0.45
-    position: [7.5, 25.5]
-    velocity: [0.2, 0.0]
+    position: [7.5, 51.0]
+    velocity: [0.1, 0.0]
     material:
-      restitution: 0.35
-      friction: 0.25
+      restitution: 0.3
+      friction: 0.2
       density: 1.2
     color: "#44cc66"
     tags: ["racer"]
@@ -89,11 +131,11 @@ objects:
   - name: "Yellow"
     shape: circle
     radius: 0.45
-    position: [10.0, 25.5]
-    velocity: [-0.3, 0.0]
+    position: [10.0, 50.0]
+    velocity: [-0.15, 0.0]
     material:
-      restitution: 0.35
-      friction: 0.25
+      restitution: 0.3
+      friction: 0.2
       density: 1.2
     color: "#ffdd44"
     tags: ["racer"]
@@ -101,58 +143,253 @@ objects:
   - name: "Purple"
     shape: circle
     radius: 0.45
-    position: [12.0, 25.5]
-    velocity: [0.3, 0.0]
+    position: [12.0, 52.0]
+    velocity: [0.15, 0.0]
     material:
-      restitution: 0.35
-      friction: 0.25
+      restitution: 0.3
+      friction: 0.2
       density: 1.2
     color: "#aa44ee"
     tags: ["racer"]
 
-  # ── Zigzag platforms ─────────────────────────────────────────────────────────
-  # Platforms alternate left/right to create a zigzag path.
-  # Each platform leaves a gap on the opposite side for balls to funnel through.
-  #
-  # World interior (between walls): x ≈ 0.3 to 14.7 (14.4 m wide)
-  # Platform width 9.0 m leaves ~5.4 m gap on the open side.
+  # ── Angled zigzag platforms ──────────────────────────────────────────────────
+  # Left platforms  → center x=4.0, size 11.0: left edge embeds into left wall,
+  #                   right edge at x=9.5; gap on right (9.5→14.7 = 5.2 m)
+  # Right platforms → center x=11.0, size 11.0: right edge embeds into right wall,
+  #                   left edge at x=5.5; gap on left (0.3→5.5 = 5.2 m)
+  # Embedding into walls eliminates the wedge-corner that traps balls.
 
-  # Platform 1 — left side, gap on right (x ≈ 10.5 to 14.7)
-  - shape: rectangle
-    size: [9.0, 0.4]
-    position: [5.0, 22.0]
-    body_type: static
-    color: "#5a4a8a"
-    tags: []
-
-  # Platform 2 — right side, gap on left (x ≈ 0.3 to 4.5)
-  - shape: rectangle
-    size: [9.0, 0.4]
-    position: [10.5, 18.0]
-    body_type: static
-    color: "#5a4a8a"
-    tags: []
-
-  # Platform 3 — left side, gap on right
-  - shape: rectangle
-    size: [9.0, 0.4]
-    position: [5.0, 14.0]
-    body_type: static
-    color: "#5a4a8a"
-    tags: []
-
-  # Platform 4 — right side, gap on left
-  - shape: rectangle
-    size: [9.0, 0.4]
-    position: [10.5, 10.0]
-    body_type: static
-    color: "#5a4a8a"
-    tags: []
-
-  # Platform 5 — center funnel, narrows towards finish
+  # Platform 1 — left side, gap on right, tilted -15°
   - shape: rectangle
     size: [11.0, 0.4]
-    position: [7.5, 6.0]
+    position: [4.0, 48.0]
+    rotation: -15.0
     body_type: static
-    color: "#7a3a6a"
+    color: "#5a4a8a"
     tags: []
+
+  # Platform 2 replaced by speed boost pad — same position/angle, cyan color
+  - name: "BoostPad"
+    shape: rectangle
+    size: [11.0, 0.4]
+    position: [11.0, 40.0]
+    rotation: 15.0
+    body_type: static
+    color: "#00ffcc"
+    boost:
+      direction: [0.0, -1.0]
+      impulse: 10.0
+    tags: ["boost"]
+
+  # Platform 3 — left side, gap on right, tilted -15°
+  - shape: rectangle
+    size: [11.0, 0.4]
+    position: [4.0, 32.0]
+    rotation: -15.0
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 4 — reversed ramp speed pad, tilted -15° (right side lower)
+  # Boost fires upward — launches balls back up off the ramp
+  - name: "RampBoost"
+    shape: rectangle
+    size: [6.0, 0.4]
+    position: [11.5, 24.0]
+    rotation: -15.0
+    body_type: static
+    color: "#00ffcc"
+    boost:
+      direction: [-1.0, 0.0]
+      impulse: 10.0
+    tags: ["boost"]
+
+  # Platform 5 — left side, gap on right, tilted -15°
+  - shape: rectangle
+    size: [9.0, 0.4]
+    position: [3.5, 16.0]
+    rotation: -15.0
+    body_type: static
+    color: "#5a4a8a"
+    tags: []
+
+  # Platform 6 → sideways boost pad: fires balls LEFT into the wall
+  - name: "DiagBoost2"
+    shape: rectangle
+    size: [9.0, 0.4]
+    position: [11.5, 8.0]
+    rotation: 15.0
+    body_type: static
+    color: "#ff44aa"
+    boost:
+      direction: [-1.0, 0.0]
+      impulse: 12.0
+    tags: ["boost"]
+
+  # Cross 4 — right corridor between RampBoost (y=24) and DiagBoost1 (y=16)
+  - name: "SpinCross4"
+    shape: polygon
+    vertices:
+      - [-1.5, -0.2]
+      - [-0.2, -0.2]
+      - [-0.2, -1.5]
+      - [0.2, -1.5]
+      - [0.2, -0.2]
+      - [1.5, -0.2]
+      - [1.5,  0.2]
+      - [0.2,  0.2]
+      - [0.2,  1.5]
+      - [-0.2,  1.5]
+      - [-0.2,  0.2]
+      - [-1.5,  0.2]
+    position: [9.5, 14.25]
+    body_type: static
+    angular_velocity: -60.0
+    material:
+      restitution: 0.4
+      friction: 0.1
+      density: 2.0
+    color: "#ff6a00"
+    tags: ["obstacle"]
+
+  # Cross 5 — moved up-left toward finish, smaller 1.0m arms
+  - name: "SpinCross5"
+    shape: polygon
+    vertices:
+      - [-2.0, -0.2]
+      - [-0.2, -0.2]
+      - [-0.2, -2.0]
+      - [0.2, -2.0]
+      - [0.2, -0.2]
+      - [2.0, -0.2]
+      - [2.0,  0.2]
+      - [0.2,  0.2]
+      - [0.2,  2.0]
+      - [-0.2,  2.0]
+      - [-0.2,  0.2]
+      - [-2.0,  0.2]
+    position: [5.0, 8.5]
+    body_type: static
+    angular_velocity: -600.0
+    material:
+      restitution: 0.4
+      friction: 0.1
+      density: 2.0
+    color: "#ff6a00"
+    tags: ["obstacle"]
+
+  # ── Spinning cross obstacles ─────────────────────────────────────────────────
+  # Placed just below the low (drop-off) end of each platform, directly in the
+  # fall path so balls interact immediately after leaving the platform.
+  # P1 (y=48, left, -15°): low end is right edge ≈ (9.5, 46.6) → cross at (10.5, 45)
+  # P3 (y=32, left, -15°): low end is right edge ≈ (9.5, 30.6) → cross at (10.5, 29)
+
+  # Cross 1 — right-side corridor between P1 (y=48) and BoostPad (y=40)
+  # Balls fall off P1's right edge (x≈9.5) and travel through x≈10-13 here
+  - name: "SpinCross1"
+    shape: polygon
+    vertices:
+      - [-1.5, -0.2]
+      - [-0.2, -0.2]
+      - [-0.2, -1.5]
+      - [0.2, -1.5]
+      - [0.2, -0.2]
+      - [1.5, -0.2]
+      - [1.5,  0.2]
+      - [0.2,  0.2]
+      - [0.2,  1.5]
+      - [-0.2,  1.5]
+      - [-0.2,  0.2]
+      - [-1.5,  0.2]
+    position: [10.5, 44.0]
+    body_type: static
+    angular_velocity: 600.0
+    material:
+      restitution: 0.4
+      friction: 0.1
+      density: 2.0
+    color: "#ff6a00"
+    tags: ["obstacle"]
+
+  # Cross 2 — left-side corridor between BoostPad (y=40) and P3 (y=32)
+  - name: "SpinCross2"
+    shape: polygon
+    vertices:
+      - [-1.5, -0.2]
+      - [-0.2, -0.2]
+      - [-0.2, -1.5]
+      - [0.2, -1.5]
+      - [0.2, -0.2]
+      - [1.5, -0.2]
+      - [1.5,  0.2]
+      - [0.2,  0.2]
+      - [0.2,  1.5]
+      - [-0.2,  1.5]
+      - [-0.2,  0.2]
+      - [-1.5,  0.2]
+    position: [1.7, 36.0]
+    body_type: static
+    angular_velocity: -600.0
+    material:
+      restitution: 0.4
+      friction: 0.1
+      density: 2.0
+    color: "#ff6a00"
+    tags: ["obstacle"]
+
+  # Cross 3 — right-side corridor between P3 (y=32) and RampBoost (y=24)
+  # Mirrored x from Cross 2 (x=1.7 → x=13.3), one layer lower (y=28)
+  # Spins opposite direction to Cross 2 for visual variety
+  - name: "SpinCross3"
+    shape: polygon
+    vertices:
+      - [-1.5, -0.2]
+      - [-0.2, -0.2]
+      - [-0.2, -1.5]
+      - [0.2, -1.5]
+      - [0.2, -0.2]
+      - [1.5, -0.2]
+      - [1.5,  0.2]
+      - [0.2,  0.2]
+      - [0.2,  1.5]
+      - [-0.2,  1.5]
+      - [-0.2,  0.2]
+      - [-1.5,  0.2]
+    position: [13.3, 28.0]
+    body_type: static
+    angular_velocity: 600.0
+    material:
+      restitution: 0.4
+      friction: 0.1
+      density: 2.0
+    color: "#ff6a00"
+    tags: ["obstacle"]
+
+  # ── Gravity Wells ────────────────────────────────────────────────────────────
+  # Placed mid-corridor between platforms to bend ball trajectories
+
+  # Attractor — mid-corridor between Platform 1 (y=48) and BoostPad (y=40)
+  - name: "PullZone"
+    shape: circle
+    radius: 0.3
+    position: [7.5, 44.0]
+    body_type: static
+    color: "#ff00ff"
+    gravity_well:
+      radius: 4.0
+      strength: 12.0
+      repulsor: false
+    tags: ["well"]
+
+  # Repulsor — mid-corridor between Platform 3 (y=32) and RampBoost (y=24)
+  - name: "PushZone"
+    shape: circle
+    radius: 0.3
+    position: [7.5, 28.0]
+    body_type: static
+    color: "#ff6600"
+    gravity_well:
+      radius: 4.0
+      strength: 12.0
+      repulsor: true
+    tags: ["well"]
