@@ -484,13 +484,15 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
 
         let (physics_events, race_events) = tracker.advance_to(physics_time)?;
 
+        let video_time = frame_count as f32 / options.fps as f32;
+
         // Collect audio events.
         for event in &physics_events {
             collect_audio_event(
                 &mut audio,
                 tracker.engine(),
                 event,
-                tracker.time(),
+                video_time,
                 scene,
                 &mut boost_cooldowns,
                 camera_y,
@@ -515,7 +517,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
             if let RaceEvent::RacerFinished { .. } = event {
                 if let Some(path) = scene.audio.default_finish.clone() {
                     audio.add_event(AudioEvent {
-                        timestamp_secs: tracker.time() + 0.2,
+                        timestamp_secs: video_time,
                         path,
                         volume: 1.0,
                     });
