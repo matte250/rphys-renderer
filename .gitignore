@@ -1,4 +1,5 @@
 target/
 *.mp4
 *.wav
+!assets/sfx/*.wav
 *.avi
