@@ -912,7 +912,7 @@ fn convert_race_config(
         return None;
     }
 
-    let countdown_seconds = raw.countdown_seconds.unwrap_or(3);
+    let countdown_seconds = raw.countdown_seconds.unwrap_or(0);
 
     Some(RaceConfig {
         finish_y,

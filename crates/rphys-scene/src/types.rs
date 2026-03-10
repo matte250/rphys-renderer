@@ -383,7 +383,7 @@ impl Default for RaceConfig {
             checkpoints: Vec::new(),
             elimination_interval_secs: None,
             post_finish_secs: 0.0,
-            countdown_seconds: 3,
+            countdown_seconds: 0,
         }
     }
 }
