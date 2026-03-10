@@ -100,6 +100,7 @@ mod tests {
             checkpoints: vec![],
             elimination_interval_secs: None,
             post_finish_secs: 0.0,
+            countdown_seconds: 3,
         }
     }
 
@@ -163,6 +164,7 @@ mod tests {
             }],
             elimination_interval_secs: None,
             post_finish_secs: 0.0,
+            countdown_seconds: 3,
         };
         let ctx = default_ctx();
 
@@ -332,6 +334,57 @@ mod tests {
         renderer
             .draw_race_frame(&mut frame, &race_state, &config, &ctx)
             .unwrap();
+    }
+
+    // ── Test: draw_countdown_text ──────────────────────────────────────────────
+
+    #[test]
+    fn draw_countdown_text_modifies_pixels() {
+        let renderer = OverlayRenderer::new();
+        let mut frame = Frame::new(320, 480);
+        for byte in frame.pixels.iter_mut() {
+            *byte = 10;
+        }
+        let before = frame.pixels.clone();
+        let ctx = default_ctx();
+
+        renderer
+            .draw_countdown_text(&mut frame, "3", &ctx)
+            .expect("draw_countdown_text should succeed");
+
+        assert_ne!(
+            frame.pixels, before,
+            "draw_countdown_text must modify at least one pixel"
+        );
+    }
+
+    #[test]
+    fn draw_countdown_text_all_values_no_panic() {
+        let renderer = OverlayRenderer::new();
+        let ctx = default_ctx();
+
+        for text in &["3", "2", "1", "GO!"] {
+            let mut frame = Frame::new(320, 480);
+            renderer
+                .draw_countdown_text(&mut frame, text, &ctx)
+                .expect("draw_countdown_text should succeed");
+        }
+    }
+
+    #[test]
+    fn draw_countdown_text_tiny_frame_no_panic() {
+        let renderer = OverlayRenderer::new();
+        let mut frame = Frame::new(20, 20);
+        let ctx = RenderContext {
+            width: 20,
+            height: 20,
+            camera_origin: Vec2::new(0.0, 0.0),
+            scale: 1.0,
+            background_color: Color::BLACK,
+        };
+        renderer
+            .draw_countdown_text(&mut frame, "GO!", &ctx)
+            .expect("draw_countdown_text should not panic on tiny frame");
     }
 
     // ── Test: many racers are capped at 8 rows ────────────────────────────────

@@ -367,6 +367,11 @@ pub struct RaceConfig {
     /// `0.0` (default) stops immediately when the winner is decided,
     /// preserving existing behaviour. Must be >= 0.
     pub post_finish_secs: f32,
+    /// Countdown duration in seconds at the start of the race.
+    ///
+    /// Displays "3… 2… 1… GO!" (or shorter if < 3) and freezes physics during
+    /// the countdown. Set to `0` to disable. Default: 3.
+    pub countdown_seconds: u32,
 }
 
 impl Default for RaceConfig {
@@ -378,6 +383,7 @@ impl Default for RaceConfig {
             checkpoints: Vec::new(),
             elimination_interval_secs: None,
             post_finish_secs: 0.0,
+            countdown_seconds: 3,
         }
     }
 }

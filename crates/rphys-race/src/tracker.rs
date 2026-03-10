@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use rphys_physics::{BodyId, PhysicsConfig, PhysicsEngine, PhysicsEvent, PhysicsState};
 use rphys_scene::{Color, RaceConfig, Scene};
 
+use crate::countdown::{CountdownEvent, CountdownManager, CountdownState};
 use crate::types::{FinishedEntry, RaceError, RaceEvent, RaceState, RacerStatus, WinnerInfo};
 
 // ── Internal racer metadata ───────────────────────────────────────────────────
@@ -77,6 +78,9 @@ pub struct RaceTracker {
     /// Running count of eliminations that have occurred so far (1-based when
     /// reported in events).
     elimination_count: usize,
+
+    /// Pre-race countdown state machine.
+    countdown: CountdownManager,
 }
 
 impl RaceTracker {
@@ -142,6 +146,8 @@ impl RaceTracker {
         // Elimination mode: first check fires at t = interval (or never).
         let next_elimination_time = race_config.elimination_interval_secs.unwrap_or(f32::MAX);
 
+        let countdown = CountdownManager::new(race_config.countdown_seconds);
+
         Ok(Self {
             engine,
             race_config,
@@ -153,6 +159,7 @@ impl RaceTracker {
             physics_complete: false,
             next_elimination_time,
             elimination_count: 0,
+            countdown,
         })
     }
 
@@ -231,6 +238,26 @@ impl RaceTracker {
     /// `true` after the first racer has crossed the finish line.
     pub fn is_race_complete(&self) -> bool {
         self.race_state.winner.is_some()
+    }
+
+    // ── Countdown ──────────────────────────────────────────────────────────
+
+    /// Step the countdown and return any event.
+    ///
+    /// This is called by the export loop *instead of* `advance_to()` during
+    /// the countdown phase. Physics is frozen during this period.
+    pub fn step_countdown(&mut self, dt: f32) -> Option<CountdownEvent> {
+        self.countdown.step(dt)
+    }
+
+    /// Current countdown state.
+    pub fn countdown_state(&self) -> CountdownState {
+        self.countdown.state()
+    }
+
+    /// The text to display for the current countdown state, if any.
+    pub fn countdown_display_text(&self) -> Option<&'static str> {
+        self.countdown.display_text()
     }
 
     // ── Private: race state update ────────────────────────────────────────────
@@ -634,6 +661,7 @@ mod tests {
             checkpoints: Vec::new(),
             elimination_interval_secs: None,
             post_finish_secs: 0.0,
+            countdown_seconds: 0,
         }
     }
 
@@ -761,6 +789,7 @@ mod tests {
                 checkpoints: Vec::new(),
                 elimination_interval_secs: None,
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -813,6 +842,7 @@ mod tests {
                 checkpoints: Vec::new(),
                 elimination_interval_secs: None,
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             },
             Some(EndCondition::TimeLimit { seconds: 10.0 }),
         );
@@ -862,6 +892,7 @@ mod tests {
                 }],
                 elimination_interval_secs: None,
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             },
             Some(EndCondition::TimeLimit { seconds: 15.0 }),
         );
@@ -981,6 +1012,7 @@ mod tests {
             checkpoints: Vec::new(),
             elimination_interval_secs: Some(interval_secs),
             post_finish_secs: 0.0,
+            countdown_seconds: 0,
         }
     }
 
@@ -1004,6 +1036,7 @@ mod tests {
                 checkpoints: Vec::new(),
                 elimination_interval_secs: Some(3.0),
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             },
             Some(EndCondition::TimeLimit { seconds: 20.0 }),
         );
@@ -1059,6 +1092,7 @@ mod tests {
                 checkpoints: Vec::new(),
                 elimination_interval_secs: Some(3.0),
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             },
             Some(EndCondition::TimeLimit { seconds: 20.0 }),
         );

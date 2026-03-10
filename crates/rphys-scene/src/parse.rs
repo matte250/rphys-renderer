@@ -912,6 +912,8 @@ fn convert_race_config(
         return None;
     }
 
+    let countdown_seconds = raw.countdown_seconds.unwrap_or(3);
+
     Some(RaceConfig {
         finish_y,
         racer_tag,
@@ -919,6 +921,7 @@ fn convert_race_config(
         checkpoints,
         elimination_interval_secs,
         post_finish_secs,
+        countdown_seconds,
     })
 }
 

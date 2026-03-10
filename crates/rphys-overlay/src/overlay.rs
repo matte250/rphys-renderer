@@ -84,6 +84,9 @@ const BANNER_DURATION_SECS: f32 = 2.0;
 /// Font size for the elimination banner text.
 const BANNER_FONT_SIZE: f32 = 22.0;
 
+/// Font size for countdown text (~2× leaderboard text).
+const COUNTDOWN_FONT_SIZE: f32 = 48.0;
+
 /// Background color for the elimination banner panel.
 const BANNER_BG: Color = Color {
     r: 20,
@@ -269,6 +272,44 @@ impl OverlayRenderer {
             );
             line_y += self.text.measure(&entry_text, NAME_FONT_SIZE).1 as i32 + 4;
         }
+
+        Ok(())
+    }
+
+    /// Render the countdown text at the center of the frame.
+    ///
+    /// `text` should be a single digit ("3", "2", "1") or "GO!".
+    /// Uses white text with a dark shadow for visibility.
+    /// Font size is approximately 2× the leaderboard text size.
+    pub fn draw_countdown_text(
+        &self,
+        frame: &mut Frame,
+        text: &str,
+        _ctx: &RenderContext,
+    ) -> Result<(), OverlayError> {
+        let fw = frame.width as i32;
+        let fh = frame.height as i32;
+
+        let font_size = COUNTDOWN_FONT_SIZE;
+
+        let (tw, th) = self.text.measure(text, font_size);
+        let text_x = ((fw - tw as i32) / 2).max(0);
+        let text_y = ((fh - th as i32) / 2).max(0);
+
+        // Drop shadow (2 px offset for larger text).
+        self.text.draw_text(
+            frame,
+            text,
+            text_x + 2,
+            text_y + 2,
+            font_size,
+            SHADOW_COLOR,
+            0.9,
+        );
+
+        // Foreground: white.
+        self.text
+            .draw_text(frame, text, text_x, text_y, font_size, Color::WHITE, 1.0);
 
         Ok(())
     }

@@ -23,7 +23,7 @@ use std::time::Instant;
 use rphys_audio::{AudioEvent, OfflineAudioMixer};
 use rphys_overlay::OverlayRenderer;
 use rphys_physics::{PhysicsConfig, PhysicsEngine, PhysicsEvent};
-use rphys_race::{RaceEvent, RaceTracker};
+use rphys_race::{CountdownState, RaceEvent, RaceTracker};
 use rphys_renderer::{
     CameraController, FollowCamera, RaceCamera, RaceCameraConfig, RenderContext, Renderer,
     StaticCamera, TinySkiaRenderer, TrailConfig, TrailRenderer,
@@ -409,6 +409,37 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     // Set to `Some(deadline)` when the first racer finishes.
     // The export loop runs until `physics_time >= deadline`.
     let mut post_finish_deadline: Option<f32> = None;
+
+    // ── Countdown phase ─────────────────────────────────────────────────
+    // While the countdown is active, freeze physics and render countdown text.
+    while tracker.countdown_state() != CountdownState::Complete {
+        tracker.step_countdown(frame_dt);
+
+        // Render the scene (frozen — no physics advance).
+        let phys_state = tracker.physics_state();
+        let ctx = active_camera.get_ctx(&phys_state, frame_dt, &[], None, false);
+
+        trail_renderer.push_frame(&phys_state, 0.0);
+        let mut frame = trail_renderer.render(&phys_state, &ctx);
+
+        // Composite VFX (static particles, if any).
+        if let Some(ref vfx) = vfx_engine {
+            vfx.render_into(&mut frame, &ctx);
+        }
+
+        // Draw the race overlay (finish line, leaderboard).
+        overlay.draw_race_frame(&mut frame, tracker.race_state(), race_config, &ctx)?;
+
+        // Draw countdown text on top.
+        if let Some(text) = tracker.countdown_display_text() {
+            overlay.draw_countdown_text(&mut frame, text, &ctx)?;
+        }
+
+        ffmpeg_stdin
+            .write_all(&frame.pixels)
+            .map_err(ExportError::Io)?;
+        frame_count += 1;
+    }
 
     loop {
         // Determine if the leader is in the slowdown zone.
@@ -1178,6 +1209,7 @@ mod tests {
                 checkpoints: vec![],
                 elimination_interval_secs: None,
                 post_finish_secs: 0.0,
+                countdown_seconds: 0,
             }),
             camera: None,
             vfx: None,
@@ -1459,6 +1491,7 @@ mod tests {
                 checkpoints: vec![],
                 elimination_interval_secs: None,
                 post_finish_secs,
+                countdown_seconds: 0,
             }),
             camera: None,
             vfx: None,
