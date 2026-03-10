@@ -412,13 +412,24 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
 
     loop {
         // Determine if the leader is in the slowdown zone.
+        //
+        // Only consider *active* (unfinished) racers: finished racers may have
+        // fallen well below `finish_y` and would keep the slowdown permanently
+        // engaged long after the race is over. `race_state().active` is the
+        // authoritative list of still-racing bodies; `unwrap_or(f32::MAX)`
+        // yields no-slowdown (full-speed dt) once everyone has finished.
+        let phys_state_for_slowdown = tracker.physics_state();
         let leader_y = tracker
-            .physics_state()
-            .bodies
-            .iter()
-            .filter(|b| b.is_alive && b.tags.iter().any(|t| t == &race_config.racer_tag))
-            .map(|b| b.position.y)
-            .reduce(f32::min)
+            .race_state()
+            .active
+            .first()
+            .and_then(|r| {
+                phys_state_for_slowdown
+                    .bodies
+                    .iter()
+                    .find(|b| b.id == r.body_id && b.is_alive)
+                    .map(|b| b.position.y)
+            })
             .unwrap_or(f32::MAX);
 
         let dt = compute_slowdown_dt(

@@ -368,21 +368,38 @@ impl FollowCamera {
     /// Core per-frame update called by both the inherent `update` method and
     /// the [`CameraController`] trait implementation.
     fn advance(&mut self, leader_pos: Option<Vec2>, events: &[PhysicsEvent], race_complete: bool) {
-        // 1. Target position: leader's position offset by look_ahead downward
-        //    (the leader is falling, so looking ahead means looking below).
-        let target = match leader_pos {
-            Some(pos) => Vec2::new(pos.x, pos.y - self.config.look_ahead),
-            None => self.world_center,
-        };
-
-        // 2. Exponentially smooth camera position toward target.
-        let lerp = self.config.follow_lerp;
-        if !self.config.lock_horizontal {
-            self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+        // 1. Compute target position — three cases:
+        //    a) Leader present → smooth-follow toward the leader.
+        //    b) No leader + race complete → freeze (hold last position exactly).
+        //    c) No leader + race not complete → lerp to world center (startup fallback).
+        match leader_pos {
+            Some(pos) => {
+                let target = Vec2::new(pos.x, pos.y - self.config.look_ahead);
+                let lerp = self.config.follow_lerp;
+                if !self.config.lock_horizontal {
+                    self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+                }
+                // When lock_horizontal is true, current_pos.x stays at world_center.x
+                // (set at construction) so both side walls are always on screen.
+                self.current_pos.y += (target.y - self.current_pos.y) * lerp;
+            }
+            None if race_complete => {
+                // Race is over and all racers have left the active list —
+                // freeze the camera exactly at its last position; do not
+                // update current_pos at all.
+            }
+            None => {
+                // Pre-race startup fallback: lerp toward world center so the
+                // camera doesn't stay at an arbitrary initial position before
+                // any racer bodies become active.
+                let lerp = self.config.follow_lerp;
+                let target = self.world_center;
+                if !self.config.lock_horizontal {
+                    self.current_pos.x += (target.x - self.current_pos.x) * lerp;
+                }
+                self.current_pos.y += (target.y - self.current_pos.y) * lerp;
+            }
         }
-        // When lock_horizontal is true, current_pos.x stays at world_center.x
-        // (set at construction) so both side walls are always on screen.
-        self.current_pos.y += (target.y - self.current_pos.y) * lerp;
 
         // 3. Camera shake.
         if self.config.shake_on_impact {
@@ -1043,6 +1060,99 @@ mod tests {
             (cam.current_zoom - 1.0).abs() < 1e-5,
             "zoom should stay at 1.0 when finish_zoom=false; got {}",
             cam.current_zoom
+        );
+    }
+
+    // ── FollowCamera: freezes when race complete and no leader ────────────────
+
+    /// When `leader_pos` is `None` and `race_complete` is `true`, the camera
+    /// must **not** move — it freezes exactly at its last known position.
+    ///
+    /// This prevents the camera from drifting to `world_center` once all
+    /// racers have crossed the finish line and left the active list.
+    #[test]
+    fn test_follow_camera_freezes_when_race_complete_no_leader() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            follow_lerp: 0.5, // non-zero so we can observe movement
+            shake_on_impact: false,
+            finish_zoom: false,
+            lock_horizontal: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+
+        // Drive the camera to a known position by following a leader.
+        let leader = Vec2::new(3.0, 8.0);
+        for _ in 0..100 {
+            cam.update(Some(leader), &[], false);
+        }
+        let pos_after_follow = cam.current_pos;
+
+        // Now simulate: race complete, no leader (all racers finished).
+        for _ in 0..100 {
+            cam.update(None, &[], true);
+        }
+
+        // Camera must not have moved at all.
+        assert!(
+            (cam.current_pos.x - pos_after_follow.x).abs() < 1e-5,
+            "camera x should be frozen at {:.4}, got {:.4}",
+            pos_after_follow.x,
+            cam.current_pos.x
+        );
+        assert!(
+            (cam.current_pos.y - pos_after_follow.y).abs() < 1e-5,
+            "camera y should be frozen at {:.4}, got {:.4}",
+            pos_after_follow.y,
+            cam.current_pos.y
+        );
+    }
+
+    // ── FollowCamera: falls back to world_center before race starts ───────────
+
+    /// When `leader_pos` is `None` and `race_complete` is `false` (pre-race
+    /// startup), the camera must lerp toward `world_center` (existing behaviour
+    /// unchanged).
+    #[test]
+    fn test_follow_camera_startup_fallback_to_world_center() {
+        use rphys_scene::CameraMode;
+        let world_center = Vec2::new(7.2, 12.8);
+        let config = CameraConfig {
+            mode: CameraMode::FollowLeader,
+            follow_lerp: 0.5,
+            shake_on_impact: false,
+            finish_zoom: false,
+            lock_horizontal: false,
+            ..CameraConfig::default()
+        };
+        let ctx = base_ctx();
+        let base_scale = ctx.width as f32 / 14.4;
+        // Start camera far from world_center.
+        let mut cam = FollowCamera::new(config, base_scale, ctx, world_center);
+        cam.current_pos = Vec2::new(0.0, 0.0);
+
+        // With lerp=0.5 and no leader, camera should move toward world_center.
+        for _ in 0..100 {
+            cam.update(None, &[], false); // race NOT complete
+        }
+
+        // After many frames the camera should have converged near world_center.
+        assert!(
+            (cam.current_pos.x - world_center.x).abs() < 0.1,
+            "x should converge to world_center.x ({:.2}), got {:.2}",
+            world_center.x,
+            cam.current_pos.x
+        );
+        assert!(
+            (cam.current_pos.y - world_center.y).abs() < 0.1,
+            "y should converge to world_center.y ({:.2}), got {:.2}",
+            world_center.y,
+            cam.current_pos.y
         );
     }
 }

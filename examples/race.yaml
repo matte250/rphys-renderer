@@ -16,6 +16,7 @@ environment:
     visible: true
     color: "#4a4a7a"
     thickness: 0.3
+    open_bottom: true
 
 race:
   finish_y: 2.0
