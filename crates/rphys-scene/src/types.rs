@@ -460,6 +460,12 @@ pub struct SceneAudio {
     pub default_bounce: Option<PathBuf>,
     /// Fallback destroy sound when an object has no per-object destroy sound.
     pub default_destroy: Option<PathBuf>,
+    /// Sound played when a bumper activates (contact with a `BumperConfig` object).
+    pub default_bumper: Option<PathBuf>,
+    /// Sound played when a boost pad activates (contact with a `BoostConfig` object).
+    pub default_boost: Option<PathBuf>,
+    /// Sound played once when a racer crosses the finish line.
+    pub default_finish: Option<PathBuf>,
     /// Master volume multiplier: 0.0 = silent, 1.0 = full.
     pub master_volume: f32,
 }
@@ -470,6 +476,9 @@ impl Default for SceneAudio {
         Self {
             default_bounce: None,
             default_destroy: None,
+            default_bumper: None,
+            default_boost: None,
+            default_finish: None,
             master_volume: 1.0,
         }
     }

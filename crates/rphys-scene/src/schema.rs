@@ -137,8 +137,11 @@ static SCENE_SCHEMA: &str = r##"{
       "description": "Global audio defaults.",
       "additionalProperties": false,
       "properties": {
-        "default_bounce":  { "type": "string", "description": "Fallback bounce sound path." },
-        "default_destroy": { "type": "string", "description": "Fallback destroy sound path." },
+        "default_bounce":  { "type": "string", "description": "Fallback bounce sound path (played on Collision / WallBounce)." },
+        "default_destroy": { "type": "string", "description": "Fallback destroy sound path (played on Destroyed)." },
+        "default_bumper":  { "type": "string", "description": "Sound played when a bumper activates (BumperActivated event)." },
+        "default_boost":   { "type": "string", "description": "Sound played when a boost pad activates (BoostActivated event)." },
+        "default_finish":  { "type": "string", "description": "Sound played once when a racer crosses the finish line (RacerFinished event)." },
         "master_volume": {
           "type": "number",
           "minimum": 0.0,

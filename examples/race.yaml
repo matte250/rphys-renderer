@@ -30,6 +30,14 @@ race:
     - y: 6.5
       label: "Final Stretch"
 
+audio:
+  master_volume: 0.8
+  default_bounce: "assets/sfx/bounce.wav"
+  default_destroy: "assets/sfx/destroy.wav"
+  default_bumper: "assets/sfx/bumper.wav"
+  default_boost: "assets/sfx/boost.wav"
+  default_finish: "assets/sfx/finish.wav"
+
 end_condition:
   type: or
   conditions:

@@ -791,17 +791,16 @@ fn convert_scene_audio(
     errors: &mut Vec<ValidationError>,
 ) -> SceneAudio {
     let raw = match raw {
-        None => {
-            return SceneAudio {
-                default_bounce: None,
-                default_destroy: None,
-                master_volume: 1.0,
-            }
-        }
+        None => return SceneAudio::default(),
         Some(r) => r,
     };
 
-    let default_bounce = raw.default_bounce.as_ref().map(|p| {
+    /// Resolve and optionally validate a single audio path field.
+    fn resolve_audio_path(
+        p: &str,
+        base_dir: Option<&Path>,
+        errors: &mut Vec<ValidationError>,
+    ) -> PathBuf {
         let path = resolve_path(p, base_dir);
         if let Some(dir) = base_dir {
             let full = dir.join(p);
@@ -810,18 +809,32 @@ fn convert_scene_audio(
             }
         }
         path
-    });
+    }
 
-    let default_destroy = raw.default_destroy.as_ref().map(|p| {
-        let path = resolve_path(p, base_dir);
-        if let Some(dir) = base_dir {
-            let full = dir.join(p);
-            if !full.exists() {
-                errors.push(ValidationError::AudioFileNotFound { path: full });
-            }
-        }
-        path
-    });
+    let default_bounce = raw
+        .default_bounce
+        .as_deref()
+        .map(|p| resolve_audio_path(p, base_dir, errors));
+
+    let default_destroy = raw
+        .default_destroy
+        .as_deref()
+        .map(|p| resolve_audio_path(p, base_dir, errors));
+
+    let default_bumper = raw
+        .default_bumper
+        .as_deref()
+        .map(|p| resolve_audio_path(p, base_dir, errors));
+
+    let default_boost = raw
+        .default_boost
+        .as_deref()
+        .map(|p| resolve_audio_path(p, base_dir, errors));
+
+    let default_finish = raw
+        .default_finish
+        .as_deref()
+        .map(|p| resolve_audio_path(p, base_dir, errors));
 
     let master_volume = raw.master_volume.unwrap_or(1.0);
     if !(0.0..=1.0).contains(&master_volume) {
@@ -834,6 +847,9 @@ fn convert_scene_audio(
     SceneAudio {
         default_bounce,
         default_destroy,
+        default_bumper,
+        default_boost,
+        default_finish,
         master_volume,
     }
 }

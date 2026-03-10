@@ -137,6 +137,14 @@ impl OfflineAudioMixer {
         }
     }
 
+    /// Return a slice of all queued [`AudioEvent`]s.
+    ///
+    /// Useful for introspection in tests — production code should use
+    /// [`mix`][OfflineAudioMixer::mix] or [`write_wav`][OfflineAudioMixer::write_wav].
+    pub fn events(&self) -> &[AudioEvent] {
+        &self.events
+    }
+
     /// Queue an [`AudioEvent`] for mixing.
     ///
     /// Events whose `timestamp_secs` falls at or beyond `duration_secs` passed

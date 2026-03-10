@@ -291,13 +291,7 @@ fn export_standard(scene: &Scene, options: ExportOptions) -> Result<(), ExportEr
     // ── Audio mux pass ─────────────────────────────────────────────────────
     // Only re-mux if there are any audio events; otherwise skip to keep
     // things simple and avoid failing in environments without audio files.
-    if scene.audio.default_bounce.is_some()
-        || scene.audio.default_destroy.is_some()
-        || scene
-            .objects
-            .iter()
-            .any(|o| o.audio.bounce.is_some() || o.audio.destroy.is_some())
-    {
+    if has_any_audio(scene) {
         let duration_secs = frame_count as f32 / options.fps as f32;
         let wav_file = NamedTempFile::new().map_err(ExportError::Io)?;
         audio
@@ -480,6 +474,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
         }
 
         // Arm the elimination banner for any eliminated racers this frame.
+        // Also emit finish/racer-finish audio events when a racer crosses the line.
         for event in &race_events {
             if let RaceEvent::RacerEliminated { display_name, .. } = event {
                 // Look up the color from the current race state.
@@ -491,6 +486,16 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
                     .map(|e| e.color)
                     .unwrap_or(Color::WHITE);
                 overlay.set_elimination_banner(display_name, color, tracker.time());
+            }
+
+            if let RaceEvent::RacerFinished { .. } = event {
+                if let Some(path) = scene.audio.default_finish.clone() {
+                    audio.add_event(AudioEvent {
+                        timestamp_secs: tracker.time(),
+                        path,
+                        volume: 1.0,
+                    });
+                }
             }
         }
 
@@ -596,13 +601,7 @@ fn export_race(scene: &Scene, options: ExportOptions) -> Result<(), ExportError>
     }
 
     // ── Audio mux pass ─────────────────────────────────────────────────────
-    if scene.audio.default_bounce.is_some()
-        || scene.audio.default_destroy.is_some()
-        || scene
-            .objects
-            .iter()
-            .any(|o| o.audio.bounce.is_some() || o.audio.destroy.is_some())
-    {
+    if has_any_audio(scene) {
         let duration_secs = frame_count as f32 / options.fps as f32;
         let wav_file = NamedTempFile::new().map_err(ExportError::Io)?;
         audio
@@ -802,6 +801,23 @@ fn build_body_snapshot(
         .collect()
 }
 
+/// Return `true` if the scene has any audio configured (scene-level defaults or
+/// per-object overrides).
+///
+/// Used to decide whether to run the two-pass audio mux step after rendering.
+fn has_any_audio(scene: &Scene) -> bool {
+    let a = &scene.audio;
+    a.default_bounce.is_some()
+        || a.default_destroy.is_some()
+        || a.default_bumper.is_some()
+        || a.default_boost.is_some()
+        || a.default_finish.is_some()
+        || scene
+            .objects
+            .iter()
+            .any(|o| o.audio.bounce.is_some() || o.audio.destroy.is_some())
+}
+
 /// Translate a [`PhysicsEvent`] into zero or more [`AudioEvent`]s and queue them.
 fn collect_audio_event(
     audio: &mut OfflineAudioMixer,
@@ -858,9 +874,29 @@ fn collect_audio_event(
                 });
             }
         }
+        PhysicsEvent::BoostActivated { .. } => {
+            // Fixed volume — boost impulses are uniform by design.
+            if let Some(path) = scene.audio.default_boost.clone() {
+                audio.add_event(AudioEvent {
+                    timestamp_secs: current_time,
+                    path,
+                    volume: 0.7,
+                });
+            }
+        }
+        PhysicsEvent::BumperActivated {
+            impulse_magnitude, ..
+        } => {
+            let volume = volume_from_impulse(*impulse_magnitude, MAX_IMPULSE);
+            if let Some(path) = scene.audio.default_bumper.clone() {
+                audio.add_event(AudioEvent {
+                    timestamp_secs: current_time,
+                    path,
+                    volume,
+                });
+            }
+        }
         // Not audio-relevant events.
-        PhysicsEvent::BoostActivated { .. } => {}
-        PhysicsEvent::BumperActivated { .. } => {}
         PhysicsEvent::GravityWellPull { .. } => {}
         PhysicsEvent::SimulationComplete { .. } => {}
     }
@@ -1602,6 +1638,186 @@ mod tests {
         assert_eq!(
             finished[0].display_name, "First",
             "winner should be 'First' (the ball starting closer to finish)"
+        );
+    }
+
+    // ── Audio event wiring tests ──────────────────────────────────────────────
+
+    /// Build a scene with custom audio paths set.
+    fn scene_with_sfx_audio() -> Scene {
+        use std::path::PathBuf;
+        let mut scene = minimal_scene();
+        scene.audio = SceneAudio {
+            default_bounce: Some(PathBuf::from("assets/sfx/bounce.wav")),
+            default_destroy: Some(PathBuf::from("assets/sfx/destroy.wav")),
+            default_bumper: Some(PathBuf::from("assets/sfx/bumper.wav")),
+            default_boost: Some(PathBuf::from("assets/sfx/boost.wav")),
+            default_finish: Some(PathBuf::from("assets/sfx/finish.wav")),
+            master_volume: 0.8,
+        };
+        scene
+    }
+
+    /// `BumperActivated` with a scene-level default bumper path → one audio event queued.
+    #[test]
+    fn test_collect_audio_bumper_activated_emits_event() {
+        use rphys_physics::types::BodyId;
+
+        let scene = scene_with_sfx_audio();
+        let physics_cfg = PhysicsConfig {
+            max_steps_per_call: u32::MAX,
+            ..PhysicsConfig::default()
+        };
+        let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
+        let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BumperActivated {
+                body: BodyId(9999), // non-existent body — falls back to scene defaults
+                contact_point: Vec2::ZERO,
+                impulse_magnitude: 50.0,
+            },
+            1.0,
+            &scene,
+        );
+
+        let events = mixer.events();
+        assert_eq!(
+            events.len(),
+            1,
+            "expected one audio event from BumperActivated"
+        );
+        assert_eq!(
+            events[0].path,
+            std::path::PathBuf::from("assets/sfx/bumper.wav")
+        );
+        // volume_from_impulse(50.0, 100.0) = 0.5
+        assert!(
+            (events[0].volume - 0.5).abs() < 1e-5,
+            "expected volume ≈ 0.5 (impulse 50 / MAX 100), got {}",
+            events[0].volume
+        );
+    }
+
+    /// `BoostActivated` with a scene-level default boost path → one audio event at volume 0.7.
+    #[test]
+    fn test_collect_audio_boost_activated_emits_event_at_fixed_volume() {
+        use rphys_physics::types::BodyId;
+
+        let scene = scene_with_sfx_audio();
+        let physics_cfg = PhysicsConfig {
+            max_steps_per_call: u32::MAX,
+            ..PhysicsConfig::default()
+        };
+        let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
+        let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BoostActivated {
+                body: BodyId(9999), // non-existent body
+            },
+            2.5,
+            &scene,
+        );
+
+        let events = mixer.events();
+        assert_eq!(
+            events.len(),
+            1,
+            "expected one audio event from BoostActivated"
+        );
+        assert_eq!(
+            events[0].path,
+            std::path::PathBuf::from("assets/sfx/boost.wav")
+        );
+        assert!(
+            (events[0].volume - 0.7).abs() < 1e-5,
+            "boost audio should have fixed volume 0.7, got {}",
+            events[0].volume
+        );
+        assert!(
+            (events[0].timestamp_secs - 2.5).abs() < 1e-5,
+            "timestamp should be current physics time"
+        );
+    }
+
+    /// When no bumper/boost audio is configured, no events are queued.
+    #[test]
+    fn test_collect_audio_no_sfx_configured_emits_nothing() {
+        use rphys_physics::types::BodyId;
+
+        let scene = minimal_scene(); // audio = SceneAudio::default() — all None
+        let physics_cfg = PhysicsConfig {
+            max_steps_per_call: u32::MAX,
+            ..PhysicsConfig::default()
+        };
+        let engine = PhysicsEngine::new(&scene, physics_cfg).expect("engine build");
+        let mut mixer = rphys_audio::OfflineAudioMixer::new(44100, 2);
+
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BumperActivated {
+                body: BodyId(1),
+                contact_point: Vec2::ZERO,
+                impulse_magnitude: 30.0,
+            },
+            0.0,
+            &scene,
+        );
+        collect_audio_event(
+            &mut mixer,
+            &engine,
+            &PhysicsEvent::BoostActivated { body: BodyId(1) },
+            0.0,
+            &scene,
+        );
+
+        assert!(
+            mixer.events().is_empty(),
+            "no audio should be queued when sfx paths are not configured"
+        );
+    }
+
+    /// `has_any_audio` returns `false` for a scene with no audio config.
+    #[test]
+    fn test_has_any_audio_false_when_all_none() {
+        let scene = minimal_scene();
+        assert!(!has_any_audio(&scene), "expected false for all-None audio");
+    }
+
+    /// `has_any_audio` returns `true` when at least one field is set.
+    #[test]
+    fn test_has_any_audio_true_when_default_bumper_set() {
+        let mut scene = minimal_scene();
+        scene.audio.default_bumper = Some(std::path::PathBuf::from("bumper.wav"));
+        assert!(
+            has_any_audio(&scene),
+            "expected true when default_bumper is set"
+        );
+    }
+
+    #[test]
+    fn test_has_any_audio_true_when_default_boost_set() {
+        let mut scene = minimal_scene();
+        scene.audio.default_boost = Some(std::path::PathBuf::from("boost.wav"));
+        assert!(
+            has_any_audio(&scene),
+            "expected true when default_boost is set"
+        );
+    }
+
+    #[test]
+    fn test_has_any_audio_true_when_default_finish_set() {
+        let mut scene = minimal_scene();
+        scene.audio.default_finish = Some(std::path::PathBuf::from("finish.wav"));
+        assert!(
+            has_any_audio(&scene),
+            "expected true when default_finish is set"
         );
     }
 }

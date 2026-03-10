@@ -201,6 +201,9 @@ pub(crate) enum RawEndCondition {
 pub(crate) struct RawSceneAudio {
     pub default_bounce: Option<String>,
     pub default_destroy: Option<String>,
+    pub default_bumper: Option<String>,
+    pub default_boost: Option<String>,
+    pub default_finish: Option<String>,
     pub master_volume: Option<f32>,
 }
 
