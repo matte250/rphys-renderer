@@ -61,6 +61,8 @@ pub(crate) struct RawWallConfig {
     pub visible: Option<bool>,
     pub color: Option<String>,
     pub thickness: Option<f32>,
+    /// When `true`, the bottom boundary collider is omitted. Omitted in YAML means `false`.
+    pub open_bottom: Option<bool>,
 }
 
 // ── Object ────────────────────────────────────────────────────────────────────

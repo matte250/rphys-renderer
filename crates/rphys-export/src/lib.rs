@@ -905,6 +905,7 @@ mod tests {
                     visible: false,
                     color: Color::WHITE,
                     thickness: 0.1,
+                    open_bottom: false,
                 },
             },
             objects: vec![SceneObject {
@@ -1150,6 +1151,7 @@ mod tests {
                     visible: true,
                     color: Color::WHITE,
                     thickness: 0.5,
+                    open_bottom: false,
                 },
             },
             objects: vec![
@@ -1435,6 +1437,7 @@ mod tests {
                     visible: true,
                     color: Color::WHITE,
                     thickness: 0.5,
+                    open_bottom: false,
                 },
             },
             objects: vec![

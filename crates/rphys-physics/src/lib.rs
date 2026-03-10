@@ -16,7 +16,7 @@
 //! #             gravity: Vec2::new(0.0, -9.81),
 //! #             background_color: Color::BLACK,
 //! #             world_bounds: WorldBounds { width: 20.0, height: 35.0 },
-//! #             walls: WallConfig { visible: true, color: Color::WHITE, thickness: 0.5 },
+//! #             walls: WallConfig { visible: true, color: Color::WHITE, thickness: 0.5, open_bottom: false },
 //! #         },
 //! #         objects: vec![],
 //! #         end_condition: None,

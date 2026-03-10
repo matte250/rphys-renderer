@@ -110,6 +110,11 @@ static SCENE_SCHEMA: &str = r##"{
               "exclusiveMinimum": 0,
               "default": 0.3,
               "description": "Wall thickness in meters."
+            },
+            "open_bottom": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the bottom boundary wall collider is not created, allowing bodies to fall below y=0."
             }
           }
         }

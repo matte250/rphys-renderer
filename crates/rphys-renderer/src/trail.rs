@@ -308,6 +308,7 @@ mod tests {
                 visible: false,
                 color: Color::WHITE,
                 thickness: 0.1,
+                open_bottom: false,
             },
         }
     }

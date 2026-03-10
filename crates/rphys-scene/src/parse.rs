@@ -627,6 +627,7 @@ fn convert_wall_config(
         visible,
         color,
         thickness,
+        open_bottom: raw.open_bottom.unwrap_or(false),
     })
 }
 

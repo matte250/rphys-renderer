@@ -281,6 +281,9 @@ pub struct WallConfig {
     pub color: Color,
     /// Wall thickness in meters.
     pub thickness: f32,
+    /// When `true`, the bottom boundary collider is omitted so dynamic bodies
+    /// can fall below `y = 0` indefinitely.  Default: `false`.
+    pub open_bottom: bool,
 }
 
 /// Global world environment settings.

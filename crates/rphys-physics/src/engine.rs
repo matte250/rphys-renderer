@@ -150,34 +150,56 @@ impl PhysicsEngine {
         }
     }
 
-    /// Create the four static boundary wall colliders.
+    /// Create the static boundary wall colliders (up to four).
+    ///
+    /// When `scene.environment.walls.open_bottom` is `true`, the bottom
+    /// collider is omitted so dynamic bodies can fall below `y = 0`.
     fn build_walls(&mut self, scene: &Scene) -> Result<(), PhysicsError> {
         let wb = &scene.environment.world_bounds;
         let t = scene.environment.walls.thickness.max(0.1_f32);
+        let open_bottom = scene.environment.walls.open_bottom;
 
-        // (centre_x, centre_y, half_extent_x, half_extent_y)
-        let specs: [(f32, f32, f32, f32); 4] = [
+        // (centre_x, centre_y, half_extent_x, half_extent_y, is_bottom)
+        let specs: [(f32, f32, f32, f32, bool); 4] = [
             // Bottom wall — top face at y = 0
-            (wb.width / 2.0, -(t / 2.0), wb.width / 2.0 + t, t / 2.0),
+            (
+                wb.width / 2.0,
+                -(t / 2.0),
+                wb.width / 2.0 + t,
+                t / 2.0,
+                true,
+            ),
             // Top wall — bottom face at y = height
             (
                 wb.width / 2.0,
                 wb.height + t / 2.0,
                 wb.width / 2.0 + t,
                 t / 2.0,
+                false,
             ),
             // Left wall — right face at x = 0
-            (-(t / 2.0), wb.height / 2.0, t / 2.0, wb.height / 2.0 + t),
+            (
+                -(t / 2.0),
+                wb.height / 2.0,
+                t / 2.0,
+                wb.height / 2.0 + t,
+                false,
+            ),
             // Right wall — left face at x = width
             (
                 wb.width + t / 2.0,
                 wb.height / 2.0,
                 t / 2.0,
                 wb.height / 2.0 + t,
+                false,
             ),
         ];
 
-        for (cx, cy, hx, hy) in specs {
+        for (cx, cy, hx, hy, is_bottom) in specs {
+            if is_bottom && open_bottom {
+                continue; // omit bottom collider when open_bottom is enabled
+            }
+
             let rb = RigidBodyBuilder::fixed()
                 .translation(Vec2::new(cx, cy))
                 .build();
@@ -900,6 +922,7 @@ mod tests {
                 visible: true,
                 color: Color::WHITE,
                 thickness: 0.5,
+                open_bottom: false,
             },
         }
     }
@@ -1706,6 +1729,45 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, PhysicsEvent::GravityWellPull { .. })),
             "expected at least one GravityWellPull event for ball inside radius"
+        );
+    }
+
+    // ── test: open_bottom allows ball to fall below y = 0 ────────────────────
+
+    /// When `walls.open_bottom = true`, a ball falling past y = 0 must NOT
+    /// bounce.  It should continue falling to a negative Y position.
+    ///
+    /// Without `open_bottom`, the bottom wall catches the ball at y ≈ 0.
+    /// With `open_bottom`, there is no bottom collider so the ball passes through.
+    #[test]
+    fn test_open_bottom_ball_falls_through() {
+        let ball = dynamic_ball(
+            Some("ball"),
+            SvVec2::new(10.0, 0.5),  // just above y = 0
+            SvVec2::new(0.0, -20.0), // fast downward velocity
+        );
+
+        let mut scene = minimal_scene(vec![ball]);
+        scene.environment.walls.open_bottom = true;
+
+        let mut engine = PhysicsEngine::new(&scene, export_config()).unwrap();
+        engine.advance_to(2.0).unwrap();
+
+        let state = engine.state();
+        let ball_state = state
+            .bodies
+            .iter()
+            .find(|b| b.name.as_deref() == Some("ball"))
+            .unwrap();
+
+        assert!(
+            ball_state.is_alive,
+            "ball should remain alive (not destroyed) when falling below y=0"
+        );
+        assert!(
+            ball_state.position.y < -1.0,
+            "ball should have fallen below y = -1.0 with open_bottom; got y = {}",
+            ball_state.position.y
         );
     }
 }

@@ -506,6 +506,7 @@ mod tests {
                 visible: true,
                 color: Color::WHITE,
                 thickness: 0.5,
+                open_bottom: false,
             },
         }
     }
