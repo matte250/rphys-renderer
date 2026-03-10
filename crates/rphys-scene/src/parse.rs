@@ -12,8 +12,8 @@ use crate::de::{
     RawSceneAudio, RawVfxConfig, RawWallConfig,
 };
 use crate::types::{
-    BodyType, BoostConfig, BoostFlashConfig, CameraConfig, CameraMode, Checkpoint, Color,
-    Destructible, EliminationBurstConfig, EndCondition, Environment, GravityWellConfig,
+    BodyType, BoostConfig, BoostFlashConfig, BumperConfig, CameraConfig, CameraMode, Checkpoint,
+    Color, Destructible, EliminationBurstConfig, EndCondition, Environment, GravityWellConfig,
     ImpactSparksConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio, SceneMeta,
     SceneObject, ShapeKind, Vec2, VfxConfig, WallConfig, WinnerPopConfig, WorldBounds,
 };
@@ -521,6 +521,22 @@ fn convert_object(
         }
     };
 
+    let bumper = match &raw.bumper {
+        None => None,
+        Some(rb) => {
+            if rb.impulse <= 0.0 {
+                errors.push(ValidationError::InvalidValue {
+                    name: display_name.clone(),
+                    message: format!("bumper.impulse must be > 0, got {}", rb.impulse),
+                });
+                return None;
+            }
+            Some(BumperConfig {
+                impulse: rb.impulse,
+            })
+        }
+    };
+
     let audio = convert_object_audio(raw.audio.as_ref(), base_dir, errors);
 
     Some(SceneObject {
@@ -537,6 +553,7 @@ fn convert_object(
         destructible,
         boost,
         gravity_well,
+        bumper,
         audio,
     })
 }

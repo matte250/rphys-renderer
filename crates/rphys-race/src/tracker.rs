@@ -539,6 +539,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: ObjectAudio::default(),
         }
     }
@@ -558,6 +559,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: ObjectAudio::default(),
         }
     }

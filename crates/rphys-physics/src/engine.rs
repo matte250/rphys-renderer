@@ -16,7 +16,8 @@ use std::sync::mpsc;
 
 use rapier2d::prelude::*;
 use rphys_scene::{
-    BodyType, BoostConfig, Color, Destructible, EndCondition, GravityWellConfig, Scene, ShapeKind,
+    BodyType, BoostConfig, BumperConfig, Color, Destructible, EndCondition, GravityWellConfig,
+    Scene, ShapeKind,
 };
 
 use crate::types::{
@@ -41,6 +42,8 @@ struct StoredBody {
     boost: Option<BoostConfig>,
     /// Gravity-well configuration, if this body acts as an attractor/repulsor.
     gravity_well: Option<GravityWellConfig>,
+    /// Pinball bumper configuration, if this body acts as a reactive bumper.
+    bumper: Option<BumperConfig>,
 }
 
 // ── PhysicsEngine ─────────────────────────────────────────────────────────────
@@ -308,6 +311,7 @@ impl PhysicsEngine {
                 body_type: effective_body_type,
                 boost: obj.boost.clone(),
                 gravity_well: obj.gravity_well.clone(),
+                bumper: obj.bumper.clone(),
             },
         );
         self.body_info_map.insert(
@@ -439,6 +443,14 @@ impl PhysicsEngine {
         // the bodies remain in contact, giving continuous acceleration.
         output.extend(self.apply_boost_impulses());
 
+        // ── apply contact-based bumper impulses ───────────────────────────────
+        //
+        // For every active contact pair, check whether one body carries a
+        // `BumperConfig` and the other is a live dynamic body. If so, apply
+        // the configured impulse to the dynamic body in the contact-normal
+        // direction (away from the bumper's center).
+        output.extend(self.apply_bumper_impulses());
+
         // ── apply gravity-well attractor / repulsor forces ────────────────────
         //
         // For each body with a `GravityWellConfig`, exert a proximity-scaled
@@ -552,6 +564,114 @@ impl PhysicsEngine {
         let dir = &boost_cfg.direction;
         let impulse_vec = Vec2::new(dir.x * boost_cfg.impulse, dir.y * boost_cfg.impulse);
         Some((target_id, impulse_vec))
+    }
+
+    /// Scan all active contact pairs for bumper configurations and apply impulses.
+    ///
+    /// For each contact where one body has a [`BumperConfig`] and the other is a
+    /// live dynamic body, apply the configured impulse to the dynamic body in the
+    /// contact-normal direction (away from the bumper's center), and emit a
+    /// [`PhysicsEvent::BumperActivated`] event.
+    ///
+    /// Two-phase design similar to boost handling.
+    fn apply_bumper_impulses(&mut self) -> Vec<PhysicsEvent> {
+        // Phase 1 — collect pending impulses
+        let mut pending: Vec<(BodyId, Vec2, Vec2, f32)> = Vec::new(); // (target_id, impulse_vec, contact_point_rapier, magnitude)
+
+        for contact_pair in self.narrow_phase.contact_pairs() {
+            if !contact_pair.has_any_active_contact() {
+                continue;
+            }
+
+            let c1 = contact_pair.collider1;
+            let c2 = contact_pair.collider2;
+
+            let id_a = match self.collider_to_id.get(&c1).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+            let id_b = match self.collider_to_id.get(&c2).copied() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            // Check both orderings: (bumper_body, dynamic_target)
+            if let Some(data) = self.resolve_bumper(id_a, id_b) {
+                pending.push(data);
+            } else if let Some(data) = self.resolve_bumper(id_b, id_a) {
+                pending.push(data);
+            }
+        }
+
+        // Phase 2 — apply impulses and build events
+        let mut events = Vec::with_capacity(pending.len());
+        for (target_id, impulse_vec, contact_point_rapier, magnitude) in pending {
+            if let Some(&rb_handle) = self.id_to_handle.get(&target_id) {
+                if let Some(rb) = self.rigid_body_set.get_mut(rb_handle) {
+                    rb.apply_impulse(impulse_vec, true);
+                    // Convert rapier Vec2 to rphys_scene::Vec2 for the event
+                    let contact_point =
+                        rphys_scene::Vec2::new(contact_point_rapier.x, contact_point_rapier.y);
+                    events.push(PhysicsEvent::BumperActivated {
+                        body: target_id,
+                        contact_point,
+                        impulse_magnitude: magnitude,
+                    });
+                }
+            }
+        }
+        events
+    }
+
+    /// Check whether `bumper_id` has a bumper config applicable to `target_id`.
+    ///
+    /// Returns `Some((target_id, impulse_vector, contact_point, magnitude))` when:
+    /// - `bumper_id` exists and carries a [`BumperConfig`],
+    /// - `target_id` exists, is still alive, and is [`BodyType::Dynamic`],
+    /// - The body centers are not coincident.
+    ///
+    /// Returns `None` otherwise.
+    fn resolve_bumper(
+        &self,
+        bumper_id: BodyId,
+        target_id: BodyId,
+    ) -> Option<(BodyId, Vec2, Vec2, f32)> {
+        let bumper_cfg = self.body_data.get(&bumper_id)?.bumper.as_ref()?;
+        let target_data = self.body_data.get(&target_id)?;
+
+        if target_data.body_type != BodyType::Dynamic {
+            return None;
+        }
+        if !self.id_to_handle.contains_key(&target_id) {
+            return None;
+        }
+
+        // Get body positions to compute contact normal
+        let bumper_handle = self.id_to_handle.get(&bumper_id)?;
+        let target_handle = self.id_to_handle.get(&target_id)?;
+        let bumper_rb = self.rigid_body_set.get(*bumper_handle)?;
+        let target_rb = self.rigid_body_set.get(*target_handle)?;
+
+        let bumper_pos = bumper_rb.translation();
+        let target_pos = target_rb.translation();
+
+        // Compute contact normal: from bumper to dynamic body
+        let displacement = target_pos - bumper_pos;
+        let distance_sq = displacement.length_squared();
+
+        // Guard against degenerate case (centers coincident)
+        if distance_sq < 1e-6 {
+            return None;
+        }
+
+        let contact_normal = displacement.normalize();
+        let impulse_vec = contact_normal * bumper_cfg.impulse;
+
+        // Use the dynamic body's position as the contact point for simplicity
+        // Keep as rapier Vec2 for now, convert to rphys_scene::Vec2 when creating event
+        let contact_point = target_pos;
+
+        Some((target_id, impulse_vec, contact_point, bumper_cfg.impulse))
     }
 
     /// Apply attractor/repulsor forces from every gravity-well body to all
@@ -965,6 +1085,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         }
     }
@@ -1290,6 +1411,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         });
         assert!(PhysicsEngine::new(&scene, PhysicsConfig::default()).is_ok());
@@ -1321,6 +1443,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1379,6 +1502,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1440,6 +1564,7 @@ mod tests {
                 impulse: 20.0,
             }),
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1462,6 +1587,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1503,6 +1629,7 @@ mod tests {
             destructible: None,
             boost: None, // ← no boost
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1545,6 +1672,7 @@ mod tests {
                 impulse: 20.0,
             }),
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1566,6 +1694,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         };
 
@@ -1608,6 +1737,7 @@ mod tests {
                 strength,
                 repulsor,
             }),
+            bumper: None,
             audio: rphys_scene::ObjectAudio::default(),
         }
     }
@@ -1769,5 +1899,422 @@ mod tests {
             "ball should have fallen below y = -1.0 with open_bottom; got y = {}",
             ball_state.position.y
         );
+    }
+
+    // ── test: bumper applies impulse in contact normal direction ──────────────
+
+    #[test]
+    fn test_bumper_left_approach() {
+        // Unit Test 1: Left Approach
+        // Static circle at origin with bumper (impulse = 10 N·s)
+        // Dynamic circle approaches from left (velocity = [+5, 0])
+        // Expected: impulse applied right (+ X-direction)
+        let scene = minimal_scene(vec![
+            // Static bumper at origin
+            rphys_scene::SceneObject {
+                name: Some("bumper".to_string()),
+                shape: ShapeKind::Circle { radius: 1.0 },
+                position: rphys_scene::Vec2::new(0.0, 0.0),
+                velocity: rphys_scene::Vec2::ZERO,
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Static,
+                material: Material::default(),
+                color: Color::rgb(255, 0, 0),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: Some(BumperConfig { impulse: 10.0 }),
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+            // Dynamic ball approaching from left
+            rphys_scene::SceneObject {
+                name: Some("ball".to_string()),
+                shape: ShapeKind::Circle { radius: 0.5 },
+                position: rphys_scene::Vec2::new(-3.0, 0.0),
+                velocity: rphys_scene::Vec2::new(5.0, 0.0),
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Dynamic,
+                material: Material::default(),
+                color: Color::rgb(0, 0, 255),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: None,
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+        ]);
+
+        let config = PhysicsConfig {
+            timestep: 1.0 / 60.0,
+            max_steps_per_call: 100,
+        };
+        let mut engine = PhysicsEngine::new(&scene, config).unwrap();
+
+        // Find ball body id
+        let ball_id = engine
+            .body_info_map
+            .iter()
+            .find(|(_, info)| info.name.as_deref() == Some("ball"))
+            .map(|(id, _)| *id)
+            .unwrap();
+
+        // Advance until collision occurs
+        let mut bumper_activated = false;
+        let mut post_contact_velocity = None;
+
+        for _ in 0..60 {
+            let events = engine.step().unwrap();
+
+            for event in &events {
+                if let PhysicsEvent::BumperActivated { body, .. } = event {
+                    if *body == ball_id {
+                        bumper_activated = true;
+                        // Get velocity after impulse
+                        if let Some(handle) = engine.id_to_handle.get(&ball_id) {
+                            if let Some(rb) = engine.rigid_body_set.get(*handle) {
+                                let vel = rb.linvel();
+                                post_contact_velocity = Some(rphys_scene::Vec2::new(vel.x, vel.y));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if bumper_activated {
+                break;
+            }
+        }
+
+        assert!(
+            bumper_activated,
+            "BumperActivated event should have been emitted"
+        );
+        assert!(
+            post_contact_velocity.is_some(),
+            "Should have captured post-contact velocity"
+        );
+
+        // Verify impulse was applied in positive X direction
+        let vel = post_contact_velocity.unwrap();
+        println!("Initial velocity: (5.0, 0.0)");
+        println!("Post-contact velocity: ({}, {})", vel.x, vel.y);
+        // The ball was approaching from left, so after bumper impulse it should bounce back left
+        assert!(
+            vel.x < 0.0,
+            "X velocity should have reversed (become negative) from bumper impulse, but got {}",
+            vel.x
+        );
+    }
+
+    #[test]
+    fn test_bumper_top_approach() {
+        // Unit Test 2: Top Approach
+        // Static circle at origin with bumper (impulse = 10 N·s)
+        // Dynamic circle approaches from above (velocity = [0, -5])
+        // Expected: impulse applied up (+ Y-direction)
+        let scene = minimal_scene(vec![
+            // Static bumper at origin
+            rphys_scene::SceneObject {
+                name: Some("bumper".to_string()),
+                shape: ShapeKind::Circle { radius: 1.0 },
+                position: rphys_scene::Vec2::new(0.0, 0.0),
+                velocity: rphys_scene::Vec2::ZERO,
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Static,
+                material: Material::default(),
+                color: Color::rgb(255, 0, 0),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: Some(BumperConfig { impulse: 10.0 }),
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+            // Dynamic ball approaching from above
+            rphys_scene::SceneObject {
+                name: Some("ball".to_string()),
+                shape: ShapeKind::Circle { radius: 0.5 },
+                position: rphys_scene::Vec2::new(0.0, 3.0),
+                velocity: rphys_scene::Vec2::new(0.0, -5.0),
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Dynamic,
+                material: Material::default(),
+                color: Color::rgb(0, 0, 255),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: None,
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+        ]);
+
+        let config = PhysicsConfig {
+            timestep: 1.0 / 60.0,
+            max_steps_per_call: 100,
+        };
+        let mut engine = PhysicsEngine::new(&scene, config).unwrap();
+
+        // Find ball body id
+        let ball_id = engine
+            .body_info_map
+            .iter()
+            .find(|(_, info)| info.name.as_deref() == Some("ball"))
+            .map(|(id, _)| *id)
+            .unwrap();
+
+        // Advance until collision occurs
+        let mut bumper_activated = false;
+        let mut post_contact_velocity = None;
+
+        for _ in 0..60 {
+            let events = engine.step().unwrap();
+
+            for event in &events {
+                if let PhysicsEvent::BumperActivated { body, .. } = event {
+                    if *body == ball_id {
+                        bumper_activated = true;
+                        // Get velocity after impulse
+                        if let Some(handle) = engine.id_to_handle.get(&ball_id) {
+                            if let Some(rb) = engine.rigid_body_set.get(*handle) {
+                                let vel = rb.linvel();
+                                post_contact_velocity = Some(rphys_scene::Vec2::new(vel.x, vel.y));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if bumper_activated {
+                break;
+            }
+        }
+
+        assert!(
+            bumper_activated,
+            "BumperActivated event should have been emitted"
+        );
+        assert!(
+            post_contact_velocity.is_some(),
+            "Should have captured post-contact velocity"
+        );
+
+        // Verify impulse was applied in positive Y direction (upward)
+        let vel = post_contact_velocity.unwrap();
+        assert!(
+            vel.y > -5.0,
+            "Y velocity should have increased (become less negative) from bumper impulse"
+        );
+    }
+
+    #[test]
+    fn test_bumper_and_boost_coexist() {
+        // Unit Test 3: Coexistence
+        // Static square at origin with both boost (direction = [1, 0], impulse = 5) and bumper (impulse = 10)
+        // Dynamic circle approaches from below
+        // Expected: both effects fire in same frame
+        let mut scene = minimal_scene(vec![
+            // Static platform with both boost and bumper
+            rphys_scene::SceneObject {
+                name: Some("platform".to_string()),
+                shape: ShapeKind::Rectangle {
+                    width: 2.0,
+                    height: 2.0,
+                },
+                position: rphys_scene::Vec2::new(0.0, 0.0),
+                velocity: rphys_scene::Vec2::ZERO,
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Static,
+                material: Material::default(),
+                color: Color::rgb(255, 255, 0),
+                tags: vec![],
+                destructible: None,
+                boost: Some(BoostConfig {
+                    direction: rphys_scene::Vec2::new(1.0, 0.0),
+                    impulse: 5.0,
+                }),
+                gravity_well: None,
+                bumper: Some(BumperConfig { impulse: 10.0 }),
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+            // Dynamic ball approaching from below
+            rphys_scene::SceneObject {
+                name: Some("ball".to_string()),
+                shape: ShapeKind::Circle { radius: 0.5 },
+                position: rphys_scene::Vec2::new(0.0, -2.0),
+                velocity: rphys_scene::Vec2::new(0.0, 8.0),
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Dynamic,
+                material: Material::default(),
+                color: Color::rgb(0, 0, 255),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: None,
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+        ]);
+
+        let config = PhysicsConfig {
+            timestep: 1.0 / 60.0,
+            max_steps_per_call: 100,
+        };
+        let mut engine = PhysicsEngine::new(&scene, config).unwrap();
+
+        // Find ball body id
+        let ball_id = engine
+            .body_info_map
+            .iter()
+            .find(|(_, info)| info.name.as_deref() == Some("ball"))
+            .map(|(id, _)| *id)
+            .unwrap();
+
+        // Advance until collision occurs
+        let mut boost_activated = false;
+        let mut bumper_activated = false;
+        let mut events_in_same_frame = false;
+
+        for i in 0..60 {
+            let events = engine.step().unwrap();
+
+            let mut frame_boost = false;
+            let mut frame_bumper = false;
+
+            if i % 10 == 0 || !events.is_empty() {
+                // Get ball position
+                if let Some(handle) = engine.id_to_handle.get(&ball_id) {
+                    if let Some(rb) = engine.rigid_body_set.get(*handle) {
+                        let pos = rb.translation();
+                        println!(
+                            "Frame {}: ball at ({}, {}), {} events",
+                            i,
+                            pos.x,
+                            pos.y,
+                            events.len()
+                        );
+                    }
+                }
+            }
+
+            for event in &events {
+                println!("  Event: {:?}", event);
+                match event {
+                    PhysicsEvent::BoostActivated { body } if *body == ball_id => {
+                        boost_activated = true;
+                        frame_boost = true;
+                    }
+                    PhysicsEvent::BumperActivated { body, .. } if *body == ball_id => {
+                        bumper_activated = true;
+                        frame_bumper = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            if frame_boost && frame_bumper {
+                events_in_same_frame = true;
+                break;
+            }
+        }
+
+        assert!(
+            boost_activated,
+            "BoostActivated event should have been emitted"
+        );
+        assert!(
+            bumper_activated,
+            "BumperActivated event should have been emitted"
+        );
+        assert!(
+            events_in_same_frame,
+            "Both events should fire in the same frame"
+        );
+    }
+
+    #[test]
+    fn test_bumper_degenerate_case() {
+        // Unit Test 4: Degenerate Case
+        // Bumper and dynamic body at identical positions
+        // Expected: impulse is skipped (no NaN, no crash)
+        let scene = minimal_scene(vec![
+            // Static bumper at origin
+            rphys_scene::SceneObject {
+                name: Some("bumper".to_string()),
+                shape: ShapeKind::Circle { radius: 1.0 },
+                position: rphys_scene::Vec2::new(0.0, 0.0),
+                velocity: rphys_scene::Vec2::ZERO,
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Static,
+                material: Material::default(),
+                color: Color::rgb(255, 0, 0),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: Some(BumperConfig { impulse: 10.0 }),
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+            // Dynamic ball at almost same position (within the degenerate threshold)
+            rphys_scene::SceneObject {
+                name: Some("ball".to_string()),
+                shape: ShapeKind::Circle { radius: 0.5 },
+                position: rphys_scene::Vec2::new(0.0001, 0.0001),
+                velocity: rphys_scene::Vec2::ZERO,
+                rotation: 0.0,
+                angular_velocity: None,
+                body_type: BodyType::Dynamic,
+                material: Material::default(),
+                color: Color::rgb(0, 0, 255),
+                tags: vec![],
+                destructible: None,
+                boost: None,
+                gravity_well: None,
+                bumper: None,
+                audio: rphys_scene::ObjectAudio::default(),
+            },
+        ]);
+
+        let config = PhysicsConfig {
+            timestep: 1.0 / 60.0,
+            max_steps_per_call: 100,
+        };
+        let mut engine = PhysicsEngine::new(&scene, config).unwrap();
+
+        // Run for several steps - should not crash or produce NaN
+        for _ in 0..10 {
+            let _ = engine.step().unwrap();
+            // We don't check for BumperActivated events because the physics engine
+            // will separate overlapping bodies, potentially causing valid collisions
+        }
+
+        // Verify ball's velocity remains zero (no NaN)
+        let ball_id = engine
+            .body_info_map
+            .iter()
+            .find(|(_, info)| info.name.as_deref() == Some("ball"))
+            .map(|(id, _)| *id)
+            .unwrap();
+
+        if let Some(handle) = engine.id_to_handle.get(&ball_id) {
+            if let Some(rb) = engine.rigid_body_set.get(*handle) {
+                let vel = rb.linvel();
+                assert!(
+                    !vel.x.is_nan() && !vel.y.is_nan(),
+                    "Velocity should not be NaN"
+                );
+                // Note: We don't check for zero velocity because the physics engine
+                // will separate overlapping bodies, causing movement
+            }
+        }
     }
 }

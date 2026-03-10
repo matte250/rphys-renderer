@@ -103,6 +103,7 @@ pub(crate) struct RawObject {
     pub destructible: Option<RawDestructible>,
     pub boost: Option<RawBoostConfig>,
     pub gravity_well: Option<RawGravityWellConfig>,
+    pub bumper: Option<RawBumperConfig>,
     pub audio: Option<RawObjectAudio>,
 }
 
@@ -139,6 +140,13 @@ pub(crate) struct RawGravityWellConfig {
     /// `false` = attractor, `true` = repulsor.
     #[serde(default)]
     pub repulsor: bool,
+}
+
+/// Raw bumper configuration — mirrors the `bumper:` YAML block.
+#[derive(Debug, Deserialize)]
+pub(crate) struct RawBumperConfig {
+    /// Impulse magnitude in N·s applied in the contact normal direction.
+    pub impulse: f32,
 }
 
 #[derive(Debug, Deserialize)]

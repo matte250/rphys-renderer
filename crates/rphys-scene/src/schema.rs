@@ -421,6 +421,20 @@ static SCENE_SCHEMA: &str = r##"{
       }
     },
 
+    "BumperConfig": {
+      "type": "object",
+      "description": "Pinball bumper configuration. When a dynamic body contacts this object, an impulse is applied in the contact-normal direction (away from the bumper's center).",
+      "required": ["impulse"],
+      "additionalProperties": false,
+      "properties": {
+        "impulse": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Impulse magnitude in N·s applied in the contact normal direction."
+        }
+      }
+    },
+
     "GravityWellConfig": {
       "type": "object",
       "description": "Gravity-well attractor/repulsor zone. Dynamic bodies within `radius` meters are continuously pulled toward (attractor) or pushed away from (repulsor) the well center.",
@@ -521,6 +535,7 @@ static SCENE_SCHEMA: &str = r##"{
         },
         "destructible": { "$ref": "#/definitions/Destructible" },
         "boost": { "$ref": "#/definitions/BoostConfig" },
+        "bumper": { "$ref": "#/definitions/BumperConfig" },
         "gravity_well": { "$ref": "#/definitions/GravityWellConfig" },
         "audio": { "$ref": "#/definitions/ObjectAudio" }
       }

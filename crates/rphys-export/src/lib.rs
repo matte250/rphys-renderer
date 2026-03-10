@@ -829,6 +829,7 @@ fn collect_audio_event(
         }
         // Not audio-relevant events.
         PhysicsEvent::BoostActivated { .. } => {}
+        PhysicsEvent::BumperActivated { .. } => {}
         PhysicsEvent::GravityWellPull { .. } => {}
         PhysicsEvent::SimulationComplete { .. } => {}
     }
@@ -922,6 +923,7 @@ mod tests {
                 destructible: None,
                 boost: None,
                 gravity_well: None,
+                bumper: None,
                 audio: ObjectAudio::default(),
             }],
             end_condition: Some(rphys_scene::EndCondition::TimeLimit { seconds: 1.0 }),
@@ -1129,6 +1131,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: ObjectAudio::default(),
         };
 
@@ -1415,6 +1418,7 @@ mod tests {
             destructible: None,
             boost: None,
             gravity_well: None,
+            bumper: None,
             audio: ObjectAudio::default(),
         };
 

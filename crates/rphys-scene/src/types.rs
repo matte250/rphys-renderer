@@ -184,6 +184,20 @@ pub struct BoostConfig {
     pub impulse: f32,
 }
 
+// ── Bumper config ─────────────────────────────────────────────────────────────
+
+/// Configuration for a pinball-style bumper.
+///
+/// When a dynamic body contacts an object with a `BumperConfig`, the physics
+/// engine applies an impulse to the dynamic body in the contact-normal direction
+/// (away from the bumper's center), creating a reactive bounce effect.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BumperConfig {
+    /// Impulse magnitude (N·s) applied in the contact normal direction.
+    /// Must be > 0.
+    pub impulse: f32,
+}
+
 // ── Destructible config ───────────────────────────────────────────────────────
 
 /// Configuration for a destructible object.
@@ -252,6 +266,11 @@ pub struct SceneObject {
     /// Dynamic bodies that enter the well's `radius` will be continuously
     /// attracted or repelled depending on `GravityWellConfig::repulsor`.
     pub gravity_well: Option<GravityWellConfig>,
+    /// If `Some`, this object acts as a pinball bumper.
+    ///
+    /// The physics engine will apply the configured impulse to any dynamic body
+    /// that contacts this object, in the contact-normal direction.
+    pub bumper: Option<BumperConfig>,
     /// Per-object sound overrides.
     pub audio: ObjectAudio,
 }

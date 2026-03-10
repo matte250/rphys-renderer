@@ -95,6 +95,19 @@ pub enum PhysicsEvent {
         /// The dynamic body that received the boost impulse.
         body: BodyId,
     },
+    /// A dynamic body contacted a bumper and received an outward impulse.
+    ///
+    /// The impulse direction is determined by the contact normal (from
+    /// bumper center to dynamic body center). Emitted once per step for
+    /// each active bumper contact.
+    BumperActivated {
+        /// The dynamic body that received the bumper impulse.
+        body: BodyId,
+        /// The contact point where the bumper activated.
+        contact_point: Vec2,
+        /// Magnitude of the impulse applied.
+        impulse_magnitude: f32,
+    },
     /// A dynamic body was within the influence radius of a gravity well and
     /// received an attractive or repulsive force impulse this step.
     ///

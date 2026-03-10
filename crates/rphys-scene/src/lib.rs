@@ -46,8 +46,8 @@ pub mod vfx;
 pub use parse::{parse_scene, parse_scene_file};
 pub use schema::scene_json_schema;
 pub use types::{
-    validate_vfx_config, BodyType, BoostConfig, BoostFlashConfig, CameraConfig, CameraMode,
-    Checkpoint, Color, Destructible, EliminationBurstConfig, EndCondition, Environment,
+    validate_vfx_config, BodyType, BoostConfig, BoostFlashConfig, BumperConfig, CameraConfig,
+    CameraMode, Checkpoint, Color, Destructible, EliminationBurstConfig, EndCondition, Environment,
     GravityWellConfig, ImpactSparksConfig, Material, ObjectAudio, RaceConfig, Scene, SceneAudio,
     SceneMeta, SceneObject, ShapeKind, Vec2, VfxConfig, VfxConfigError, WallConfig,
     WinnerPopConfig, WorldBounds,

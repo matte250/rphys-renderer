@@ -244,6 +244,27 @@ impl VfxEngine {
                     }
                 }
 
+                PhysicsEvent::BumperActivated { contact_point, .. }
+                    if self.config.impact_sparks.enabled =>
+                {
+                    // Use the contact point directly instead of computing midpoint
+                    let color = Color::rgb(255, 200, 100); // Golden sparks for bumpers
+                    let cfg = &self.config.impact_sparks;
+                    pending_sparks.push(PendingSparks {
+                        pos: *contact_point,
+                        color,
+                        params: SparkParams {
+                            count: cfg.count,
+                            lifetime_secs: cfg.lifetime_secs,
+                            size_px: cfg.size_px,
+                            speed: cfg.speed,
+                            angle_min: 0.0,
+                            angle_max: 2.0 * PI,
+                            colors: None,
+                        },
+                    });
+                }
+
                 _ => {}
             }
         }
